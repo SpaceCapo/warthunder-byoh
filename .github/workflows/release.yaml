@@ -9,13 +9,175 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  flightmodel:
+    name: "Gather Flight Model Artifacts"
     runs-on: ubuntu-latest
-
+    outputs:
+      fmversion: ${{ steps.fetch.outputs.fmversion }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+      - name: Fetch Flight Model
+        id: fetch
+        run: |
+          make fetch-fm
+          FM_VERSION=$(cat data/fm/version_tag)
+          echo "fmversion=$FM_VERSION" >> $GITHUB_OUTPUT
+          find ./data 
+      - name: Upload Flight Model 
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm
+          path: data
 
+  build-macos:
+    runs-on: ubuntu-latest
+    needs: flightmodel
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Extract version
+        id: vars
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT    
+      - name: Download shared assets
+        uses: actions/download-artifact@v4
+        with:
+          name: fm
+          path: .
+      - name: Flatten
+        run: |
+          echo "----- data -----"
+          find ./data -print
+          echo "-----  fm  -----"
+          find ./fm -print
+          mv ./fm/* ./data/
+          rm -rf ./fm 
+      - name: Debugdir
+        run: |
+          find ./data -print
+      - name: Build and package macos
+        id: package-macos
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          FM_VERSION: ${{ needs.flightmodel.outputs.fmversion }}
+        run: |
+          make mac-app
+          mkdir -p output/
+          # tgz the output
+          tar -czf output/warthunder-byoh-${TAG}-fm-${FM_VERSION}-macos-universal.tgz -C release/macos .
+      - name: Upload macos 
+        uses: actions/upload-artifact@v4
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          FM_VERSION: ${{ needs.flightmodel.outputs.fmversion }}
+        with:
+          name: warthunder-byoh-${{ steps.vars.outputs.tag }}-fm-${{ needs.flightmodel.outputs.fmversion }}-macos-universal.tgz
+          path: output/warthunder-byoh-${{ steps.vars.outputs.tag }}-fm-${{ needs.flightmodel.outputs.fmversion }}-macos-universal.tgz
+
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: flightmodel
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Extract version
+        id: vars
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT 
+      - name: Download shared assets
+        uses: actions/download-artifact@v4
+        with:
+          name: fm
+          path: .
+      - name: Flatten
+        run: |
+          echo "----- data -----"
+          find ./data -print
+          echo "-----  fm  -----"
+          find ./fm -print
+          mv ./fm/* ./data/
+          rm -rf ./fm 
+      - name: Build and package linux
+        id: package-linux
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          FM_VERSION: ${{ needs.flightmodel.outputs.fmversion }}
+        run: |
+          make linux-all-pkg
+          mkdir -p output/
+          # tgz the output
+          tar -czf output/warthunder-byoh-${TAG}-fm-${FM_VERSION}-linux-x64.tgz -C release/linux .
+      - name: Upload linux 
+        uses: actions/upload-artifact@v4
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          FM_VERSION: ${{ needs.flightmodel.outputs.fmversion }}
+        with:
+          name: warthunder-byoh-${{ steps.vars.outputs.tag }}-fm-${{ needs.flightmodel.outputs.fmversion }}-linux-x64.tgz
+          path: output/warthunder-byoh-${{ steps.vars.outputs.tag }}-fm-${{ needs.flightmodel.outputs.fmversion }}-linux-x64.tgz
+
+  build-windows:
+    runs-on: ubuntu-latest
+    needs: flightmodel
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Extract version
+        id: vars
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT 
+      - name: Download shared assets
+        uses: actions/download-artifact@v4
+        with:
+          name: fm
+          path: .
+      - name: Flatten
+        run: |
+          echo "----- data -----"
+          find ./data -print
+          echo "-----  fm  -----"
+          find ./fm -print
+          mv ./fm/* ./data/
+          rm -rf ./fm      
+      - name: Build and package windows
+        id: package-windows
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          FM_VERSION: ${{ needs.flightmodel.outputs.fmversion }}
+        run: |
+          make windows-pkg
+          mkdir -p output/
+          # zip
+          cd release/windows && zip -r ../../output/warthunder-byoh-${TAG}-fm-${FM_VERSION}-windows-x64.zip .
+      - name: Upload windows 
+        uses: actions/upload-artifact@v4
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          FM_VERSION: ${{ needs.flightmodel.outputs.fmversion }}
+        with:
+          name: warthunder-byoh-${{ steps.vars.outputs.tag }}-fm-${{ needs.flightmodel.outputs.fmversion }}-windows-x64.zip
+          path: output/warthunder-byoh-${{ steps.vars.outputs.tag }}-fm-${{ needs.flightmodel.outputs.fmversion }}-windows-x64.zip
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [flightmodel, build-macos, build-linux, build-windows]
+    steps:
       - name: Extract version
         id: vars
         run: |
@@ -23,34 +185,21 @@ jobs:
           VERSION=${TAG#v}
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Prepare package
-        id: package
-        env:
-          VERSION: ${{ steps.vars.outputs.version }}
-          TAG: ${{ steps.vars.outputs.tag }}
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: .
+      - name: Collect Artifacts
         run: |
-          make package
-
-          FM_VERSION=$(cat release/windows/fm/version_tag)
-          echo "fmversion=$FM_VERSION" >> $GITHUB_OUTPUT"
-
-          # zip (windows) and tgz (linux/mac) release/{linux,windows,macos} up
-          zip -r   warthunder-byoh-${TAG}-fm-${FM_VERSION}-windows-x64.zip release/windows/*
-          tar -czf warthunder-byoh-${TAG}-fm-${FM_VERSION}-linux-x64.tgz -C release/linux .
-          tar -czf warthunder-byoh-${TAG}-fm-${FM_VERSION}-macos-universal.tgz -C release/macos .
-
+          mkdir release-files
+          find . -type f \( -name "*.tgz" -o -name "*.zip" \) -exec mv -v {} release-files/ \;
       - name: Create Release
         env:
           VERSION: ${{ steps.vars.outputs.version }}
           TAG: ${{ steps.vars.outputs.tag }}
-          FM_VERSION: ${{ steps.package.outputs.fmversion }}
+          FM_VERSION: ${{ needs.flightmodel.outputs.fmversion }}
         uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ steps.vars.outputs.tag }}
-          files: 
-            - warthunder-byoh-${TAG}-fm-${FM_VERSION}-windows-x64.zip
-            - warthunder-byoh-${TAG}-fm-${FM_VERSION}-linux-x64.tgz
-            - warthunder-byoh-${TAG}-fm-${FM_VERSION}-macos-universal.tgz
-
+          files: release-files/*
           generate_release_notes: true
