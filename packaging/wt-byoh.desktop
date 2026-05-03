@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=WT BYOH
+Comment=War Thunder overlay - Bring Your Own HUD
+Exec=/usr/local/bin/warthunder-byoh
+Icon=/usr/local/share/icons/hicolor/256x256/apps/warthunder-byoh.png
+Type=Application
+Categories=Game;Utility;
+Keywords=warthunder;overlay;hud;
+StartupNotify=false

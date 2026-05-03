@@ -1,0 +1,56 @@
+name: Release on Tag Push
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: vars
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Prepare package
+        id: package
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          make package
+
+          FM_VERSION=$(cat release/windows/fm/version_tag)
+          echo "fmversion=$FM_VERSION" >> $GITHUB_OUTPUT"
+
+          # zip (windows) and tgz (linux/mac) release/{linux,windows,macos} up
+          zip -r   warthunder-byoh-${TAG}-fm-${FM_VERSION}-windows-x64.zip release/windows/*
+          tar -czf warthunder-byoh-${TAG}-fm-${FM_VERSION}-linux-x64.tgz -C release/linux .
+          tar -czf warthunder-byoh-${TAG}-fm-${FM_VERSION}-macos-universal.tgz -C release/macos .
+
+      - name: Create Release
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          FM_VERSION: ${{ steps.package.outputs.fmversion }}
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ steps.vars.outputs.tag }}
+          files: 
+            - warthunder-byoh-${TAG}-fm-${FM_VERSION}-windows-x64.zip
+            - warthunder-byoh-${TAG}-fm-${FM_VERSION}-linux-x64.tgz
+            - warthunder-byoh-${TAG}-fm-${FM_VERSION}-macos-universal.tgz
+
+          generate_release_notes: true

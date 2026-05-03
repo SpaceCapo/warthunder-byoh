@@ -1,0 +1,10 @@
+.cargo/
+target/
+**/*.rs.bk
+release/
+data/indicators.json
+data/fm/
+tmp/**
+__pycache__
+deploy/
+*Zone.Identifier

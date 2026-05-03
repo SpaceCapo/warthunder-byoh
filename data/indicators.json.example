@@ -1,0 +1,131 @@
+[
+    {
+        "id": "flight",
+        "x": 550,
+        "y": 40,
+        "indicators": [
+        {
+                "id": "airbrake",
+                "label": "ABRK",
+                "formula": "airbrake_pct",
+                "format": "+decimal1",
+                "show_when": "valid",
+                "crit_above": 0
+            },
+            {
+                "id": "flaps",
+                "label": "FLPS",
+                "formula": "flaps_pct",
+                "format": "+decimal1",
+                "show_when": "valid",
+                "warn_above": 0
+            },
+            {
+                "id": "gear",
+                "label": "GEAR",
+                "formula": "gear_pct",
+                "format": "+decimal1",
+                "show_when": "valid",
+                "warn_above": 0
+            },
+            {
+                "id": "g_meter_pct",
+                "label": "CritG",
+                "unit": "%",
+                "formula": "indicators_g_meter / crit_g_pos * 100",
+                "format": "integer",
+                "show_when": "valid",
+                "warn_above": 60,
+                "crit_above": 80
+            },
+            {
+                "id": "aoa_pct",
+                "label": "CAOA",
+                "formula": "math::abs(aoa_deg) / fm_crit_aoa_pos * 100",
+                "format": "integer",
+                "show_when": "valid",
+                "warn_above": 60,
+                "crit_above": 80
+            },
+            {
+                "id": "gear_spd_pct",
+                "label": "GSPD",
+                "unit": "%",
+                "formula": "ias_kmh / fm_crit_gear_spd * 100",
+                "format": "integer",
+                "show_when": "valid != 0.0 && gear_pct > 0.0",
+                "warn_above": 75,
+                "crit_above": 90
+            },
+            {
+                "id": "flap_spd_pct",
+                "label": "FSPD",
+                "unit": "%",
+                "formula": "ias_kmh / fm_crit_flaps_current * 100",
+                "format": "integer",
+                "show_when": "valid != 0.0 && flaps_pct > 0.0 && fm_crit_flaps_current > 0.0",
+                "warn_above": 66,
+                "crit_above": 80
+            }
+        ]
+    },
+    {
+        "id": "performance",
+        "x": 550,
+        "y": 400,
+        "indicators": [
+            {
+                "id": "climb",
+                "label": "CLMB",
+                "unit": "m/s",
+                "formula": "vy_ms",
+                "format": "+decimal1",
+                "show_when": "valid"
+            },
+            {
+                "id": "sep",
+                "label": "SEP",
+                "unit": "m/s",
+                "formula": "sep",
+                "format": "+decimal1",
+                "show_when": "valid"
+            },
+            {
+                "id": "pitch",
+                "label": "PITCH",
+                "unit": "°",
+                "formula": "0 - indicators_aviahorizon_pitch",
+                "format": "decimal1",
+                "show_when": "valid"
+            },
+            {
+                "id": "HDG",
+                "label": "HDG",
+                "unit": "°",
+                "formula": "indicators_compass",
+                "format": "integer",
+                "show_when": "valid"
+            },
+            {
+                "id": "aoa",
+                "label": "AOA",
+                "unit": "°",
+                "formula": "aoa_deg",
+                "format": "decimal1",
+                "show_when": "valid",
+                "warn_above": "fm_crit_aoa_pos",
+                "warn_below": "fm_crit_aoa_neg"
+            },
+            {
+                "id": "fuel_time",
+                "label": "FUEL",
+                "unit": "",
+                "formula": "(mfuel_kg / indicators_fuel_consume) * 60",
+                "format": "time",
+                "show_when": "valid",
+                "warn_below": "15 * 60",
+                "crit_below": "5 * 60"
+            }
+        ]
+    }
+]

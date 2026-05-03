@@ -1,0 +1,906 @@
+[
+  {
+    "id": "indicators_altitude1_hour",
+    "endpoint": "/indicators",
+    "api_key": "altitude1_hour",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_altitude_10k",
+    "endpoint": "/indicators",
+    "api_key": "altitude_10k",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_altitude_hour",
+    "endpoint": "/indicators",
+    "api_key": "altitude_hour",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_altitude_min",
+    "endpoint": "/indicators",
+    "api_key": "altitude_min",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_aoa",
+    "endpoint": "/indicators",
+    "api_key": "aoa",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_army",
+    "endpoint": "/indicators",
+    "api_key": "army",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "string"
+  },
+  {
+    "id": "indicators_aviahorizon_pitch",
+    "endpoint": "/indicators",
+    "api_key": "aviahorizon_pitch",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_aviahorizon_roll",
+    "endpoint": "/indicators",
+    "api_key": "aviahorizon_roll",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_bank",
+    "endpoint": "/indicators",
+    "api_key": "bank",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_bank1",
+    "endpoint": "/indicators",
+    "api_key": "bank1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister1",
+    "endpoint": "/indicators",
+    "api_key": "blister1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister10",
+    "endpoint": "/indicators",
+    "api_key": "blister10",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister11",
+    "endpoint": "/indicators",
+    "api_key": "blister11",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister12",
+    "endpoint": "/indicators",
+    "api_key": "blister12",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister13",
+    "endpoint": "/indicators",
+    "api_key": "blister13",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister14",
+    "endpoint": "/indicators",
+    "api_key": "blister14",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister15",
+    "endpoint": "/indicators",
+    "api_key": "blister15",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister2",
+    "endpoint": "/indicators",
+    "api_key": "blister2",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister3",
+    "endpoint": "/indicators",
+    "api_key": "blister3",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister4",
+    "endpoint": "/indicators",
+    "api_key": "blister4",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister5",
+    "endpoint": "/indicators",
+    "api_key": "blister5",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister6",
+    "endpoint": "/indicators",
+    "api_key": "blister6",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister7",
+    "endpoint": "/indicators",
+    "api_key": "blister7",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister8",
+    "endpoint": "/indicators",
+    "api_key": "blister8",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_blister9",
+    "endpoint": "/indicators",
+    "api_key": "blister9",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_clock_hour",
+    "endpoint": "/indicators",
+    "api_key": "clock_hour",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_clock_min",
+    "endpoint": "/indicators",
+    "api_key": "clock_min",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_clock_sec",
+    "endpoint": "/indicators",
+    "api_key": "clock_sec",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_compass",
+    "endpoint": "/indicators",
+    "api_key": "compass",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_compass1",
+    "endpoint": "/indicators",
+    "api_key": "compass1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_compass2",
+    "endpoint": "/indicators",
+    "api_key": "compass2",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_flaps",
+    "endpoint": "/indicators",
+    "api_key": "flaps",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_flaps_indicator",
+    "endpoint": "/indicators",
+    "api_key": "flaps_indicator",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_fuel",
+    "endpoint": "/indicators",
+    "api_key": "fuel",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_fuel_consume",
+    "endpoint": "/indicators",
+    "api_key": "fuel_consume",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_fuel_consume1",
+    "endpoint": "/indicators",
+    "api_key": "fuel_consume1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_fuel_pressure",
+    "endpoint": "/indicators",
+    "api_key": "fuel_pressure",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_fuel_pressure1",
+    "endpoint": "/indicators",
+    "api_key": "fuel_pressure1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_g_meter",
+    "endpoint": "/indicators",
+    "api_key": "g_meter",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_g_meter_max",
+    "endpoint": "/indicators",
+    "api_key": "g_meter_max",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_g_meter_min",
+    "endpoint": "/indicators",
+    "api_key": "g_meter_min",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_gear_c_indicator",
+    "endpoint": "/indicators",
+    "api_key": "gear_c_indicator",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_gear_l_indicator",
+    "endpoint": "/indicators",
+    "api_key": "gear_l_indicator",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_gear_r_indicator",
+    "endpoint": "/indicators",
+    "api_key": "gear_r_indicator",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_gears",
+    "endpoint": "/indicators",
+    "api_key": "gears",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_gears1",
+    "endpoint": "/indicators",
+    "api_key": "gears1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_mach",
+    "endpoint": "/indicators",
+    "api_key": "mach",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_oil_pressure",
+    "endpoint": "/indicators",
+    "api_key": "oil_pressure",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_oil_pressure1",
+    "endpoint": "/indicators",
+    "api_key": "oil_pressure1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_pedals1",
+    "endpoint": "/indicators",
+    "api_key": "pedals1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_pedals2",
+    "endpoint": "/indicators",
+    "api_key": "pedals2",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_pedals3",
+    "endpoint": "/indicators",
+    "api_key": "pedals3",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_pedals4",
+    "endpoint": "/indicators",
+    "api_key": "pedals4",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_pedals5",
+    "endpoint": "/indicators",
+    "api_key": "pedals5",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_pedals6",
+    "endpoint": "/indicators",
+    "api_key": "pedals6",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_radio_altitude",
+    "endpoint": "/indicators",
+    "api_key": "radio_altitude",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_rpm1_hour",
+    "endpoint": "/indicators",
+    "api_key": "rpm1_hour",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_rpm1_min",
+    "endpoint": "/indicators",
+    "api_key": "rpm1_min",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_rpm_hour",
+    "endpoint": "/indicators",
+    "api_key": "rpm_hour",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_rpm_min",
+    "endpoint": "/indicators",
+    "api_key": "rpm_min",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_speed",
+    "endpoint": "/indicators",
+    "api_key": "speed",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_speed1",
+    "endpoint": "/indicators",
+    "api_key": "speed1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_speed2",
+    "endpoint": "/indicators",
+    "api_key": "speed2",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_speed3",
+    "endpoint": "/indicators",
+    "api_key": "speed3",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_stick_ailerons",
+    "endpoint": "/indicators",
+    "api_key": "stick_ailerons",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_stick_elevator",
+    "endpoint": "/indicators",
+    "api_key": "stick_elevator",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_throttle",
+    "endpoint": "/indicators",
+    "api_key": "throttle",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_throttle1",
+    "endpoint": "/indicators",
+    "api_key": "throttle1",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_trimmer",
+    "endpoint": "/indicators",
+    "api_key": "trimmer",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_trimmer_indicator",
+    "endpoint": "/indicators",
+    "api_key": "trimmer_indicator",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_turn",
+    "endpoint": "/indicators",
+    "api_key": "turn",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_type",
+    "endpoint": "/indicators",
+    "api_key": "type",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "string"
+  },
+  {
+    "id": "indicators_valid",
+    "endpoint": "/indicators",
+    "api_key": "valid",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "bool"
+  },
+  {
+    "id": "indicators_vario",
+    "endpoint": "/indicators",
+    "api_key": "vario",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_water_temperature1_hour",
+    "endpoint": "/indicators",
+    "api_key": "water_temperature1_hour",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_water_temperature1_min",
+    "endpoint": "/indicators",
+    "api_key": "water_temperature1_min",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_water_temperature_hour",
+    "endpoint": "/indicators",
+    "api_key": "water_temperature_hour",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_water_temperature_min",
+    "endpoint": "/indicators",
+    "api_key": "water_temperature_min",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_weapon2",
+    "endpoint": "/indicators",
+    "api_key": "weapon2",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "indicators_weapon3",
+    "endpoint": "/indicators",
+    "api_key": "weapon3",
+    "label": "INDICATORS",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "mission_status",
+    "endpoint": "/mission.json",
+    "api_key": "status",
+    "label": "MISSION",
+    "unit": "",
+    "type": "string"
+  },
+  {
+    "id": "aoa_deg",
+    "endpoint": "/state",
+    "api_key": "AoA, deg",
+    "label": "AOA",
+    "unit": "°",
+    "type": "f64"
+  },
+  {
+    "id": "aos_deg",
+    "endpoint": "/state",
+    "api_key": "AoS, deg",
+    "label": "AOS",
+    "unit": "°",
+    "type": "f64"
+  },
+  {
+    "id": "h_m",
+    "endpoint": "/state",
+    "api_key": "H, m",
+    "label": "H",
+    "unit": "m",
+    "type": "f64"
+  },
+  {
+    "id": "ias_kmh",
+    "endpoint": "/state",
+    "api_key": "IAS, km/h",
+    "label": "IAS",
+    "unit": "km/h",
+    "type": "f64"
+  },
+  {
+    "id": "m",
+    "endpoint": "/state",
+    "api_key": "M",
+    "label": "M",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "mfuel_kg",
+    "endpoint": "/state",
+    "api_key": "Mfuel, kg",
+    "label": "MFUEL",
+    "unit": "kg",
+    "type": "f64"
+  },
+  {
+    "id": "mfuel0_kg",
+    "endpoint": "/state",
+    "api_key": "Mfuel0, kg",
+    "label": "MFUEL0",
+    "unit": "kg",
+    "type": "f64"
+  },
+  {
+    "id": "ny",
+    "endpoint": "/state",
+    "api_key": "Ny",
+    "label": "NY",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "rpm_1",
+    "endpoint": "/state",
+    "api_key": "RPM 1",
+    "label": "RPM",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "rpm_2",
+    "endpoint": "/state",
+    "api_key": "RPM 2",
+    "label": "RPM",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "tas_kmh",
+    "endpoint": "/state",
+    "api_key": "TAS, km/h",
+    "label": "TAS",
+    "unit": "km/h",
+    "type": "f64"
+  },
+  {
+    "id": "vy_ms",
+    "endpoint": "/state",
+    "api_key": "Vy, m/s",
+    "label": "VY",
+    "unit": "m/s",
+    "type": "f64"
+  },
+  {
+    "id": "wx_deg_s",
+    "endpoint": "/state",
+    "api_key": "Wx, deg/s",
+    "label": "WX",
+    "unit": "°",
+    "type": "f64"
+  },
+  {
+    "id": "aileron_pct",
+    "endpoint": "/state",
+    "api_key": "aileron, %",
+    "label": "AILERON",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "airbrake_pct",
+    "endpoint": "/state",
+    "api_key": "airbrake, %",
+    "label": "AIRBRAKE",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "efficiency_1_pct",
+    "endpoint": "/state",
+    "api_key": "efficiency 1, %",
+    "label": "EFFICIENCY",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "efficiency_2_pct",
+    "endpoint": "/state",
+    "api_key": "efficiency 2, %",
+    "label": "EFFICIENCY",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "elevator_pct",
+    "endpoint": "/state",
+    "api_key": "elevator, %",
+    "label": "ELEVATOR",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "flaps_pct",
+    "endpoint": "/state",
+    "api_key": "flaps, %",
+    "label": "FLAPS",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "gear_pct",
+    "endpoint": "/state",
+    "api_key": "gear, %",
+    "label": "GEAR",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "manifold_pressure_1_atm",
+    "endpoint": "/state",
+    "api_key": "manifold pressure 1, atm",
+    "label": "MANIFOLD",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "manifold_pressure_2_atm",
+    "endpoint": "/state",
+    "api_key": "manifold pressure 2, atm",
+    "label": "MANIFOLD",
+    "unit": "",
+    "type": "f64"
+  },
+  {
+    "id": "oil_temp_1_c",
+    "endpoint": "/state",
+    "api_key": "oil temp 1, C",
+    "label": "OIL",
+    "unit": "°C",
+    "type": "f64"
+  },
+  {
+    "id": "oil_temp_2_c",
+    "endpoint": "/state",
+    "api_key": "oil temp 2, C",
+    "label": "OIL",
+    "unit": "°C",
+    "type": "f64"
+  },
+  {
+    "id": "power_1_hp",
+    "endpoint": "/state",
+    "api_key": "power 1, hp",
+    "label": "POWER",
+    "unit": "hp",
+    "type": "f64"
+  },
+  {
+    "id": "power_2_hp",
+    "endpoint": "/state",
+    "api_key": "power 2, hp",
+    "label": "POWER",
+    "unit": "hp",
+    "type": "f64"
+  },
+  {
+    "id": "rudder_pct",
+    "endpoint": "/state",
+    "api_key": "rudder, %",
+    "label": "RUDDER",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "throttle_1_pct",
+    "endpoint": "/state",
+    "api_key": "throttle 1, %",
+    "label": "THROTTLE",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "throttle_2_pct",
+    "endpoint": "/state",
+    "api_key": "throttle 2, %",
+    "label": "THROTTLE",
+    "unit": "%",
+    "type": "f64"
+  },
+  {
+    "id": "thrust_1_kgs",
+    "endpoint": "/state",
+    "api_key": "thrust 1, kgs",
+    "label": "THRUST",
+    "unit": "kg",
+    "type": "f64"
+  },
+  {
+    "id": "thrust_2_kgs",
+    "endpoint": "/state",
+    "api_key": "thrust 2, kgs",
+    "label": "THRUST",
+    "unit": "kg",
+    "type": "f64"
+  },
+  {
+    "id": "valid",
+    "endpoint": "/state",
+    "api_key": "valid",
+    "label": "VALID",
+    "unit": "",
+    "type": "bool"
+  }
+]
