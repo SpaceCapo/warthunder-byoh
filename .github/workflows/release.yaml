@@ -193,6 +193,27 @@ jobs:
         run: |
           mkdir release-files
           find . -type f \( -name "*.tgz" -o -name "*.zip" \) -exec mv -v {} release-files/ \;
+      - name: Generate Auto-Generated Release Notes
+        id: autonotes
+        run: |
+          curl -s \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -X POST \
+            https://api.github.com/repos/${{ github.repository }}/releases/generate-notes \
+            -d '{
+              "tag_name": "${{ github.ref_name }}",
+              "target_commitish": "main"
+            }' > notes.json
+          jq -r .body notes.json > auto_notes.md  
+      - name: Build Final Release Notes
+        id: finalnotes
+        run: |
+          echo "## War Thunder BYOH (Bring Your Own HUD) Release ${{ steps.vars.outputs.tag }}" > body.md            
+          echo "" >> body.md
+          echo "**War Thunder BYO Flight Model Version:** ${{ needs.flightmodel.outputs.fmversion }} [(GitHub Link)](https://github.com/SpaceCapo/warthunder-byo-fm/releases/${{ needs.flightmodel.outputs.fmversion }})" >> body.md
+          echo "" >> body.md
+          echo "### Details"
+          cat auto_notes.md >> body.md
       - name: Create Release
         env:
           VERSION: ${{ steps.vars.outputs.version }}
@@ -203,3 +224,7 @@ jobs:
           name: Release ${{ steps.vars.outputs.tag }}
           files: release-files/*
           generate_release_notes: true
+          body_path: body.md
+
+
+
