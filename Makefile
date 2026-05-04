@@ -146,7 +146,7 @@ fetch-fm:
 # Deploy directory: use WT_BYOH_DEPLOY_DIR env var if set/non-empty, otherwise default to ./deploy
 DEPLOY_DIR := $(if $(strip $(WT_BYOH_DEPLOY_DIR)),$(strip $(WT_BYOH_DEPLOY_DIR)),./deploy)
 
-windows-deploy: windows fetch-fm
+windows-deploy: windows-pkg fetch-fm
 	@echo "Deploying Windows build to $(DEPLOY_DIR)..."
 	@mkdir -p $(DEPLOY_DIR)/fm/fm
 	cp -v  $(RELEASE_DIR)/windows/$(BIN).exe     $(DEPLOY_DIR)/$(BIN).exe

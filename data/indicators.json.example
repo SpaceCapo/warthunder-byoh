@@ -117,10 +117,18 @@
                 "warn_below": "fm_crit_aoa_neg"
             },
             {
+                "id": "fuel_flow",
+                "label": "FF",
+                "unit": "kg/h",
+                "formula": "fuel_flow",
+                "format": "integer",
+                "show_when": "valid"
+            },
+            {
                 "id": "fuel_time",
                 "label": "FUEL",
                 "unit": "",
-                "formula": "(mfuel_kg / indicators_fuel_consume) * 60",
+                "formula": "(mfuel_kg / fuel_flow) * 3600",
                 "format": "time",
                 "show_when": "valid",
                 "warn_below": "15 * 60",
