@@ -14,7 +14,7 @@ Displays real-time flight data, vehicle statistics, and session information dire
 - **Data-driven indicators** — define any combination of fields via `indicators.json`; supports expressions, thresholds, and colour tokens
 - **Two render backends** — GPU path (wgpu + egui, default) and a lightweight GDI fallback for Windows
 - **~60 Hz display, ~6 Hz data** — overlay renders smoothly from a cached snapshot; no HTTP on the render hot path
-- **Flight model database** — bundled CSV database of 1,537 aircraft with display names, types, and performance parameters (1,192 FM entries) parsed from game datamine data
+- **Flight model database** — CSV database of 1,537 aircraft with display names, types, and performance parameters; auto-updates from [warthunder-byo-fm](https://github.com/SpaceCapo/warthunder-byo-fm) releases on startup
 - **Field catalog** — scraped catalog of all known War Thunder local API fields (`data/fields.json`)
 - **Cross-platform** — builds for Windows (x86_64), Linux (glibc and musl static), and macOS via Docker cross-compilation
 - **Local-only by default** — queries only the game's own `localhost` API; no data leaves your machine
@@ -148,7 +148,21 @@ The `data/fm/` directory contains two CSV databases generated from game datamine
 | `fm_data_db.csv` | Performance parameters (max speed, climb rate, turn time, engine power, etc.) | 1,192 |
 | `fm_names_db.csv` | Display names, FM file mappings, and aircraft type classifications | 1,537 |
 
-To regenerate from a fresh datamine:
+### Automatic Updates
+
+On startup the overlay checks the [warthunder-byo-fm](https://github.com/SpaceCapo/warthunder-byo-fm) GitHub releases for a newer FM database. If one is available it downloads and extracts it into the `fm/` directory next to the executable — no user action required. The current local version is shown in the settings window (GPU build) or printed to the console on startup.
+
+If the check fails (no internet, GitHub down, etc.) the overlay continues normally with whatever FM data is already on disk.
+
+To force a manual update outside the overlay:
+
+```bash
+make fetch-fm
+```
+
+### Regenerating from Datamine
+
+To rebuild from a fresh game datamine instead:
 
 ```bash
 python3 tools/parse_fm.py \
