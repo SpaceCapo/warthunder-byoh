@@ -2,6 +2,8 @@
 
 A lightweight, local-only in-game overlay for [War Thunder](https://warthunder.com/), built as an open-source alternative to [WTRTI](https://mesofthorny.github.io/WTRTI/).
 
+Built on top of flight model data shared in the [warthunder-byo-fm](https://github.com/SpaceCapo/warthunder-byo-fm) GitHub Repo.
+
 Displays real-time flight data, vehicle statistics, and session information directly on top of the game — with no process injection and no anti-cheat risk.
 
 ---
