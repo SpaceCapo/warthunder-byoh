@@ -49,12 +49,12 @@ data/
 
 ## Getting Started
 
-## Installing
+### Installing
 - Download the appropriate release .zip file from the releases section. 
 - Unzip to your favorite folder.
 - Run the `warthunder_byoh` executable for your platform (eg: `warthunder_byoh.exe` (Windows) or `warthunder_byoh` (Linux) or `War Thunder BYOH` (Mac)) 
 
-## Configuration
+### Configuration
 - Edit the `indicators.json` file with the game closed. See `indicators.json.example` for some examples and `fields.json` for all possible field.s
 
 ### Build
