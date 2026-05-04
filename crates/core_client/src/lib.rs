@@ -456,6 +456,53 @@ fn inject_derived_fields(frame: &mut RawFrame, state: &mut DerivedState, now: In
             }
         }
     }
+
+    // ── Unified fuel flow (kg/h) ──────────────────────────────────────────────
+    // `fuel_flow` is the single field to use in indicators.json regardless of
+    // aircraft type.  Prefer the native `fuel_consume` reported by the API;
+    // fall back to the differentiated EMA for planes that don't expose it.
+    // Calculated instantaneous rate: differentiate `mfuel_kg` over time.
+    // We only update when the fuel value actually changes (same ~6 Hz guard
+    // used for TAS above) and only when the aircraft is burning fuel (Δfuel > 0).
+    if let Some(&fuel_kg) = frame.get("mfuel_kg") {
+        let changed = state.last_fuel_kg.map(|prev| prev != fuel_kg).unwrap_or(true);
+        if changed {
+            if let (Some(prev_kg), Some(prev_t)) = (state.last_fuel_kg, state.last_fuel_time) {
+                let dt_s = now.duration_since(prev_t).as_secs_f64();
+                let delta_kg = prev_kg - fuel_kg; // positive when consuming
+                if dt_s >= 0.05 && delta_kg > 0.0 {
+                    let rate_kgh = (delta_kg / dt_s) * 3600.0;
+                    if rate_kgh < 50_000.0 {
+                        const ALPHA: f64 = 0.25;
+                        let smoothed = match state.fuel_consume_ema {
+                            Some(prev_ema) => prev_ema + ALPHA * (rate_kgh - prev_ema),
+                            None => rate_kgh,
+                        };
+                        state.fuel_consume_ema = Some(smoothed);
+                    }
+                } else if delta_kg <= 0.0 {
+                    // Fuel went up (refuel / new mission) — reset the EMA.
+                    state.fuel_consume_ema = None;
+                }
+            }
+            state.last_fuel_kg = Some(fuel_kg);
+            state.last_fuel_time = Some(now);
+        }
+    }
+
+    // Emit `fuel_consume_calc` from the EMA when the native field is absent.
+    if !frame.contains_key("fuel_consume") {
+        if let Some(rate) = state.fuel_consume_ema {
+            frame.insert("fuel_consume_calc".into(), rate);
+        }
+    }
+
+    // Always emit `fuel_flow`: native API value takes priority, EMA as fallback.
+    let flow = frame.get("fuel_consume").copied()
+        .or_else(|| state.fuel_consume_ema);
+    if let Some(rate) = flow {
+        frame.insert("fuel_flow".into(), rate);
+    }
 }
 
 fn inject_fm_fields(frame: &mut RawFrame, rec: &FmRecord) {
@@ -938,11 +985,24 @@ struct DerivedState {
     /// cache (injected at ~60 Hz while the server only updates at ~6 Hz) do
     /// not flood the buffer with zero-slope duplicates.
     last_tas_pushed: Option<f64>,
+
+    /// Last fuel sample used to compute instantaneous consumption.
+    last_fuel_kg: Option<f64>,
+    last_fuel_time: Option<Instant>,
+    /// EMA-smoothed fuel consumption rate (kg/h).  α = 0.25 so the display
+    /// settles within a few API ticks (~1 s) without being too jittery.
+    fuel_consume_ema: Option<f64>,
 }
 
 impl DerivedState {
     fn new() -> Self {
-        Self { tas_history: VecDeque::with_capacity(8), last_tas_pushed: None }
+        Self {
+            tas_history: VecDeque::with_capacity(8),
+            last_tas_pushed: None,
+            last_fuel_kg: None,
+            last_fuel_time: None,
+            fuel_consume_ema: None,
+        }
     }
 }
 
@@ -1720,6 +1780,86 @@ mod tests {
         // fm_crit_wing_overload_pos intentionally absent
         inject_derived_fields(&mut frame, &mut state, Instant::now());
         assert!(frame.get("crit_g_pos").is_none(), "crit_g_pos should be absent without fm_crit_wing_overload_pos");
+    }
+
+    #[test]
+    fn test_fuel_consume_calc_basic() {
+        // Two frames 1 second apart, burning 1 kg → 3600 kg/h raw rate.
+        // First call primes the state; second call emits the field.
+        use std::time::Duration;
+        let t0 = Instant::now();
+        let mut state = DerivedState::new();
+
+        let mut f0 = RawFrame::new();
+        f0.insert("vy_ms".into(), 0.0);
+        f0.insert("tas_kmh".into(), 400.0);
+        f0.insert("mfuel_kg".into(), 500.0);
+        inject_derived_fields(&mut f0, &mut state, t0);
+        // First call just primes; no output yet.
+        assert!(f0.get("fuel_consume_calc").is_none());
+
+        let mut f1 = RawFrame::new();
+        f1.insert("vy_ms".into(), 0.0);
+        f1.insert("tas_kmh".into(), 400.0);
+        f1.insert("mfuel_kg".into(), 499.0); // burned 1 kg in 1 s = 3600 kg/h
+        inject_derived_fields(&mut f1, &mut state, t0 + Duration::from_secs(1));
+        let rate = *f1.get("fuel_consume_calc").expect("fuel_consume_calc should be present");
+        // EMA first sample = raw rate = 3600 kg/h
+        assert!((rate - 3600.0).abs() < 1.0, "expected ~3600 kg/h, got {rate}");
+    }
+
+    #[test]
+    fn test_fuel_consume_calc_absent_when_native_present() {
+        // When `fuel_consume` is already in the frame (native API field),
+        // `fuel_consume_calc` must NOT be emitted.
+        use std::time::Duration;
+        let t0 = Instant::now();
+        let mut state = DerivedState::new();
+
+        let mut f0 = RawFrame::new();
+        f0.insert("vy_ms".into(), 0.0);
+        f0.insert("tas_kmh".into(), 400.0);
+        f0.insert("mfuel_kg".into(), 500.0);
+        f0.insert("fuel_consume".into(), 250.0);
+        inject_derived_fields(&mut f0, &mut state, t0);
+
+        let mut f1 = RawFrame::new();
+        f1.insert("vy_ms".into(), 0.0);
+        f1.insert("tas_kmh".into(), 400.0);
+        f1.insert("mfuel_kg".into(), 499.0);
+        f1.insert("fuel_consume".into(), 250.0);
+        inject_derived_fields(&mut f1, &mut state, t0 + Duration::from_secs(1));
+        assert!(f1.get("fuel_consume_calc").is_none(), "should not emit calc when native present");
+    }
+
+    #[test]
+    fn test_fuel_consume_calc_resets_on_refuel() {
+        // EMA should reset when fuel goes up (refuel / new mission).
+        use std::time::Duration;
+        let t0 = Instant::now();
+        let mut state = DerivedState::new();
+
+        // Prime with a normal burn
+        let mut f0 = RawFrame::new();
+        f0.insert("vy_ms".into(), 0.0);
+        f0.insert("tas_kmh".into(), 400.0);
+        f0.insert("mfuel_kg".into(), 500.0);
+        inject_derived_fields(&mut f0, &mut state, t0);
+        let mut f1 = RawFrame::new();
+        f1.insert("vy_ms".into(), 0.0);
+        f1.insert("tas_kmh".into(), 400.0);
+        f1.insert("mfuel_kg".into(), 499.0);
+        inject_derived_fields(&mut f1, &mut state, t0 + Duration::from_secs(1));
+        assert!(f1.get("fuel_consume_calc").is_some());
+
+        // Now fuel goes up (refuel)
+        let mut f2 = RawFrame::new();
+        f2.insert("vy_ms".into(), 0.0);
+        f2.insert("tas_kmh".into(), 400.0);
+        f2.insert("mfuel_kg".into(), 600.0);
+        inject_derived_fields(&mut f2, &mut state, t0 + Duration::from_secs(2));
+        // EMA was reset; no output this tick
+        assert!(f2.get("fuel_consume_calc").is_none(), "should reset EMA on refuel");
     }
 
     #[test]
