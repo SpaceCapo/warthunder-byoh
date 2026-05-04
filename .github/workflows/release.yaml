@@ -203,8 +203,7 @@ jobs:
             -d '{
               "tag_name": "${{ github.ref_name }}",
               "target_commitish": "main"
-            }' > notes.json
-          jq -r .body notes.json > auto_notes.md  
+            }' | jq -r '.body' > auto_notes.md
       - name: Build Final Release Notes
         id: finalnotes
         run: |
@@ -212,7 +211,7 @@ jobs:
           echo "" >> body.md
           echo "**War Thunder BYO Flight Model Version:** ${{ needs.flightmodel.outputs.fmversion }} [(GitHub Link)](https://github.com/SpaceCapo/warthunder-byo-fm/releases/${{ needs.flightmodel.outputs.fmversion }})" >> body.md
           echo "" >> body.md
-          echo "### Details"
+          echo "### Details" >> body.md
           cat auto_notes.md >> body.md
       - name: Create Release
         env:
