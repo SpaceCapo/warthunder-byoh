@@ -49,13 +49,23 @@ data/
 
 ## Getting Started
 
-### Prerequisites
+## Installing
+- Download the appropriate release .zip file from the releases section. 
+- Unzip to your favorite folder.
+- Run the `warthunder_byoh` executable for your platform (eg: `warthunder_byoh.exe` (Windows) or `warthunder_byoh` (Linux) or `War Thunder BYOH` (Mac)) 
+
+## Configuration
+- Edit the `indicators.json` file with the game closed. See `indicators.json.example` for some examples and `fields.json` for all possible field.s
+
+### Build
+
+#### Prerequisites
 
 - [Docker](https://www.docker.com/) — used for all cross-compilation
 - `make`
 - War Thunder installed and running (for live use), or use fixture JSON files for development
 
-### Build
+#### Building
 
 ```bash
 # Build the Windows binaries (both GDI and GPU backends)
