@@ -192,11 +192,14 @@ pub fn setup_gpu_window(_window: &winit::window::Window) {
     // Wayland / X11 / macOS: winit + wgpu handle transparency natively.
 }
 
-/// Hide the overlay window from the taskbar / dock window list.
+/// Hide the overlay window from the taskbar / dock window list, and on macOS
+/// also pins the window above all other application windows so it acts as a
+/// true always-on-top overlay.
 ///
 /// - Windows: `WS_EX_TOOLWINDOW` is handled in the `windows-glue` module above.
-/// - macOS: Set `NSWindowCollectionBehaviorTransient` so the window is excluded
-///   from Mission Control and the Dock's window list.
+/// - macOS: Sets window level to `NSFloatingWindowLevel` (5) so the window
+///   sits above normal app windows, and configures `collectionBehavior` so the
+///   overlay appears on every Space and in fullscreen apps.
 /// - Linux: no-op (X11 `_NET_WM_WINDOW_TYPE_UTILITY` TODO).
 #[cfg(not(feature = "windows-glue"))]
 pub fn hide_from_taskbar(window: &winit::window::Window) {
@@ -216,18 +219,38 @@ pub fn hide_from_taskbar(window: &winit::window::Window) {
                     #[allow(non_camel_case_types)]
                     type objc_msgSend_usize_fn =
                         unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, usize);
+                    #[allow(non_camel_case_types)]
+                    type objc_msgSend_i64_fn =
+                        unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, i64);
 
                     let send_ptr: objc_msgSend_ptr_fn = std::mem::transmute(objc_msgSend as *const ());
                     let send_usize: objc_msgSend_usize_fn = std::mem::transmute(objc_msgSend as *const ());
+                    let send_i64: objc_msgSend_i64_fn = std::mem::transmute(objc_msgSend as *const ());
 
                     let sel_window = sel_registerName(b"window\0".as_ptr() as *const std::ffi::c_char);
                     let ns_window = send_ptr(h.ns_view.as_ptr() as *mut std::ffi::c_void, sel_window);
                     if ns_window.is_null() { return; }
 
-                    // NSWindowCollectionBehaviorTransient = 1 << 7 (128)
-                    // Excludes the window from the dock window list and Mission Control.
+                    // Set window level to NSFloatingWindowLevel (5).
+                    // This places the overlay above all normal application windows,
+                    // fixing the "disappears when focus is lost" problem that occurs
+                    // when winit's WindowLevel::AlwaysOnTop (NSNormalWindowLevel+1)
+                    // is used, which is still below the active app's windows.
+                    let sel_level = sel_registerName(b"setLevel:\0".as_ptr() as *const std::ffi::c_char);
+                    send_i64(ns_window, sel_level, 5); // NSFloatingWindowLevel = 5
+
+                    // collectionBehavior flags:
+                    //   NSWindowCollectionBehaviorCanJoinAllSpaces  = 1 << 0  (1)
+                    //     → overlay follows the user across all Spaces
+                    //   NSWindowCollectionBehaviorStationary        = 1 << 4  (16)
+                    //     → pinned; not moved by Exposé / Mission Control
+                    //   NSWindowCollectionBehaviorTransient         = 1 << 7  (128)
+                    //     → excluded from the Dock window list and Mission Control
+                    //   NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8 (256)
+                    //     → visible while another app is in fullscreen
+                    let behavior: usize = (1 << 0) | (1 << 4) | (1 << 7) | (1 << 8);
                     let sel_cb = sel_registerName(b"setCollectionBehavior:\0".as_ptr() as *const std::ffi::c_char);
-                    send_usize(ns_window, sel_cb, 1 << 7);
+                    send_usize(ns_window, sel_cb, behavior);
                 }
             }
         }
