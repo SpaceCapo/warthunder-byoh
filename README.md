@@ -120,24 +120,182 @@ Start War Thunder first. The overlay will display a graceful offline state when 
 
 ## Configuration
 
-Overlay windows and indicators are defined in `indicators.json`. Copy `indicators.json.example` as a starting point:
+### `indicators.json`
+
+Overlay windows and indicators are defined in `indicators.json`. Copy `data/indicators.json.example` as a starting point. The file is a JSON array; each element defines one transparent overlay window that appears on screen.
+
+#### Window object
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `id` | yes | — | Unique string identifier for the window |
+| `x` | no | `0` | Horizontal position in logical (DPI-scaled) pixels from the top-left of the primary monitor |
+| `y` | no | `0` | Vertical position in logical pixels |
+| `width` | no | `240` | Window width in logical pixels |
+| `height` | no | auto | Window height; if omitted, computed from the number of indicators |
+| `indicators` | yes | — | Array of indicator definitions (rows in this window) |
+
+#### Indicator object
+
+Each entry in `indicators` defines one row in the window.
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `id` | yes | — | Unique string identifier for this row |
+| `label` | yes | — | Text shown in the left column |
+| `formula` | yes | — | Expression to evaluate; see **Expressions** below |
+| `unit` | no | `""` | Text shown in the right column after the value |
+| `format` | no | `"integer"` | How the computed value is rendered; see **Formats** |
+| `color` | no | — | Fixed colour token — bypasses all threshold logic |
+| `show_when` | no | always show | Expression; row is hidden when this evaluates to `0` or `false` |
+| `warn_above` | no | — | Colour → `warn` when `value > threshold` |
+| `warn_below` | no | — | Colour → `warn` when `value < threshold` |
+| `good_above` | no | — | Colour → `good` when `value > threshold` |
+| `good_below` | no | — | Colour → `good` when `value < threshold` |
+| `crit_above` | no | — | Colour → `crit` when `value > threshold` |
+| `crit_below` | no | — | Colour → `crit` when `value < threshold` |
+
+#### Formats
+
+| Format | Example output | Notes |
+|---|---|---|
+| `"integer"` | `1234` | Default; rounds to nearest integer |
+| `"decimal1"` | `12.3` | One decimal place |
+| `"decimal2"` | `12.34` | Two decimal places |
+| `"+decimal1"` | `+12.3` / `-12.3` | One decimal place, always prints sign |
+| `"+decimal2"` | `+12.34` / `-12.34` | Two decimal places, always prints sign |
+| `"time"` | `4:32` / `1:23:45` | Treats value as **seconds**; renders as M:SS or H:MM:SS. Negative or non-finite → `--:--` |
+
+#### Colour tokens
+
+| Token | Meaning |
+|---|---|
+| `"value"` | Normal / white (default when no threshold is met) |
+| `"warn"` | Warning — yellow |
+| `"good"` | Good / in-range — green |
+| `"crit"` | Critical / danger — red |
+
+**Priority**: when multiple threshold conditions are met simultaneously, the highest severity wins: `crit` > `warn` > `good`. Setting `color` directly overrides all thresholds.
+
+#### Thresholds
+
+Each threshold field can be either a **number literal** or a **formula string** that references the same variables available in `formula`. Formula thresholds are evaluated at render time, so they adapt per vehicle:
+
+```json
+{ "warn_above": 650 }
+{ "warn_above": "fm_crit_ias" }
+{ "crit_below": "5 * 60" }
+```
+
+#### Expressions
+
+`formula`, `show_when`, and formula-style thresholds are evaluated by the [`evalexpr`](https://docs.rs/evalexpr) engine. Supported syntax:
+
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%`, `^` (power)
+- **Comparison**: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- **Boolean**: `&&`, `||`, `!`
+- **Math functions**: `math::abs(x)`, `math::floor(x)`, `math::ceil(x)`, `math::sqrt(x)`, `math::min(x,y)`, `math::max(x,y)`, `math::clamp(x,min,max)`, and others — see the [evalexpr docs](https://docs.rs/evalexpr) for the full list
+
+If any variable referenced in a formula is absent from the current data frame (e.g. an FM field for an unrecognised aircraft), the indicator row is silently hidden — no error is shown.
+
+#### Available variables
+
+**Common API fields** — the full list is in `data/fields.json`:
+
+| Variable | Description |
+|---|---|
+| `valid` | `1.0` when in-flight telemetry is live; `0.0` in menus/hangar. Use as a `show_when` guard on every indicator. |
+| `ias_kmh` | Indicated airspeed (km/h) |
+| `tas_kmh` | True airspeed (km/h) |
+| `altitude_m` | Barometric altitude (m) |
+| `vy_ms` | Vertical speed (m/s) |
+| `mfuel_kg` | Current fuel mass (kg) |
+| `aoa_deg` | Angle of attack (deg) |
+| `gear_pct` | Gear extension 0–100 |
+| `flaps_pct` | Flap extension 0–100 |
+| `airbrake_pct` | Airbrake extension 0–100 |
+| `indicators_g_meter` | Current G-load |
+| `indicators_compass` | Compass heading (deg) |
+| `indicators_aviahorizon_pitch` | Pitch (deg, API sign is inverted — use `0 - indicators_aviahorizon_pitch` for positive-up) |
+| `fuel_consume` | Fuel flow as reported by the API (kg/h); present on some aircraft only |
+| `thrust_1_kgs` … `thrust_4_kgs` | Per-engine thrust (kgf) |
+
+**Derived fields** — computed by WT BYOH from raw API data:
+
+| Variable | Description |
+|---|---|
+| `sep` | Specific Excess Power (m/s) — kinematic form: `Vz + (TAS/g) × dTAS/dt` via OLS regression over a 2-second sliding window |
+| `sep_thrust` | Thrust-based SEP upper bound (m/s): `ΣThrust_kgf × TAS_ms / weight_kg`; requires FM empty mass and live fuel data |
+| `fuel_flow` | Unified fuel flow (kg/h): native `fuel_consume` if the API reports it, otherwise an EMA-smoothed calculated rate. **Use this in preference to `fuel_consume`.** |
+| `fuel_consume_calc` | EMA-smoothed calculated fuel flow (kg/h); only emitted when the native `fuel_consume` is absent |
+| `crit_g_pos` | Structural positive G limit for current gross weight, using FM wing overload data |
+| `fm_crit_flaps_current` | Speed limit (km/h) for the currently-extended flap detent (combat/takeoff/landing) |
+
+**FM database fields** — injected when WT BYOH identifies the current aircraft. All absent and silently ignored for unknown aircraft:
+
+| Variable | Description |
+|---|---|
+| `fm_crit_ias` | VNE — never-exceed IAS (km/h) |
+| `fm_crit_mach` | Never-exceed Mach number |
+| `fm_crit_gear_spd` | Max gear-extension speed (km/h) |
+| `fm_crit_flaps_spd` | Max full-flap extension speed (km/h) |
+| `fm_crit_flaps_combat_spd` | Max combat-flap extension speed (km/h) |
+| `fm_crit_aoa_pos` | Critical positive AoA (deg) |
+| `fm_crit_aoa_neg` | Critical negative AoA (deg) |
+| `fm_crit_wing_overload_pos` | Max positive structural wing load (N) |
+| `fm_crit_wing_overload_neg` | Max negative structural wing load (N) |
+| `fm_max_fuel_kg` | Maximum fuel capacity (kg) |
+| `fm_empty_mass_kg` | Empty / structural mass (kg) |
+| `fm_rpm_normal` | Normal max RPM |
+| `fm_rpm_max` | Emergency max RPM |
+| `fm_num_engines` | Number of engines |
+
+#### Example
 
 ```json
 [
   {
     "id": "flight",
-    "x": 100,
-    "y": 100,
+    "x": 550,
+    "y": 40,
     "indicators": [
-      { "id": "altitude", "label": "ALT", "expr": "altitude", "unit": "m" },
-      { "id": "speed",    "label": "IAS", "expr": "IAS",      "unit": "km/h",
-        "warn": 650, "good": 0 }
+      {
+        "id": "ias",
+        "label": "IAS",
+        "unit": "km/h",
+        "formula": "ias_kmh",
+        "format": "integer",
+        "show_when": "valid",
+        "warn_above": "fm_crit_ias * 0.9",
+        "crit_above": "fm_crit_ias"
+      },
+      {
+        "id": "fuel_time",
+        "label": "FUEL",
+        "formula": "(mfuel_kg / fuel_flow) * 3600",
+        "format": "time",
+        "show_when": "valid",
+        "warn_below": "15 * 60",
+        "crit_below": "5 * 60"
+      },
+      {
+        "id": "sep",
+        "label": "SEP",
+        "unit": "m/s",
+        "formula": "sep",
+        "format": "+decimal1",
+        "show_when": "valid"
+      }
     ]
   }
 ]
 ```
 
-Available fields are listed in `data/fields.json`. Use `expr` to combine or transform values with standard arithmetic expressions.
+See `data/indicators.json.example` for a more complete example. After editing, use the "Reload indicators & config" button in the Settings tab (GPU build) to apply changes without restarting. If the file contains invalid JSON or an expression error, a dialog shows the details and your running configuration is left unchanged.
+
+---
+
+### `config.json`
 
 Persistent application settings are stored in `config.json`. A starter example is provided at `config.json.example` (repo root) — copy it next to `indicators.json` or into the executable directory as `config.json` to customize behaviour. Example:
 
@@ -149,10 +307,13 @@ Persistent application settings are stored in `config.json`. A starter example i
 }
 ```
 
-Meaning:
-- `always_show`: overlay remains visible regardless of War Thunder focus/mission state.
-- `show_when_byoh_foreground`: also show overlay while the BYOH settings window has focus (useful for positioning).
-- `only_during_mission`: hide the overlay when `/mission.json` does not report `status: "running"` (the key is supported but the checkbox is currently hidden in the UI while mission polling is stabilised).
+| Key | Default | Description |
+|---|---|---|
+| `always_show` | `false` | Show overlay regardless of War Thunder focus or mission state |
+| `show_when_byoh_foreground` | `false` | Also show overlay while the BYOH settings window has focus; useful for positioning indicators |
+| `only_during_mission` | `false` | Hide overlay when `/mission.json` does not report `status: "running"`. This key is supported but the checkbox is currently hidden in the UI while mission polling is stabilised |
+
+`config.json` is written automatically when you change a setting in the Settings tab, so you typically only need to create it manually to set `only_during_mission` until the UI exposes it again.
 
 ---
 
