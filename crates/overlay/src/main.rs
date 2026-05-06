@@ -24,7 +24,9 @@
 
 #[cfg(feature = "render")]
 use core_client::DisplayRow;
-use core_client::{Client, WindowDef};
+use core_client::Client;
+#[cfg(feature = "render")]
+use core_client::WindowDef;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -109,13 +111,34 @@ struct GpuApp {
     fm_version_tag: String,
     /// Whether War Thunder is currently the foreground window.
     wt_foreground: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the BYOH settings window is focused.
+    byoh_foreground: bool,
+    /// Whether a mission is actively running (from /mission.json).
+    mission_running: Arc<std::sync::atomic::AtomicBool>,
+    /// Shared application config.
+    app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
+    /// Set by the Reload button in settings; cleared by the poller thread.
+    reload_requested: Arc<std::sync::atomic::AtomicBool>,
+    /// Error message from the last failed reload, written by the poller thread
+    /// and consumed by the settings window to show a popup.
+    reload_error: Arc<std::sync::Mutex<Option<String>>>,
     /// Cached visibility state — avoids redundant set_visible calls.
     overlays_visible: bool,
 }
 
 #[cfg(feature = "gpu")]
 impl GpuApp {
-    fn new(shared: Shared, shared_gen: SharedGen, window_defs: Vec<WindowDef>, fm_version_tag: String, wt_foreground: Arc<std::sync::atomic::AtomicBool>) -> Self {
+    fn new(
+        shared: Shared,
+        shared_gen: SharedGen,
+        window_defs: Vec<WindowDef>,
+        fm_version_tag: String,
+        wt_foreground: Arc<std::sync::atomic::AtomicBool>,
+        mission_running: Arc<std::sync::atomic::AtomicBool>,
+        app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
+        reload_requested: Arc<std::sync::atomic::AtomicBool>,
+        reload_error: Arc<std::sync::Mutex<Option<String>>>,
+    ) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         Self {
             shared,
@@ -131,6 +154,11 @@ impl GpuApp {
             settings_win: None,
             fm_version_tag,
             wt_foreground,
+            byoh_foreground: false,
+            mission_running,
+            app_config,
+            reload_requested,
+            reload_error,
             overlays_visible: true,
         }
     }
@@ -231,7 +259,13 @@ impl ApplicationHandler for GpuApp {
         if self.settings_win.is_none() {
             if let Some(ctx) = self.ctx.as_ref() {
                 self.settings_win = settings::SettingsWindow::new(
-                    event_loop, &self.instance, ctx, self.fm_version_tag.clone(),
+                    event_loop,
+                    &self.instance,
+                    ctx,
+                    self.fm_version_tag.clone(),
+                    self.app_config.clone(),
+                    self.reload_requested.clone(),
+                    self.reload_error.clone(),
                 );
                 if let Some(sw) = self.settings_win.as_ref() {
                     sw.window.set_window_icon(app_icon());
@@ -254,6 +288,9 @@ impl ApplicationHandler for GpuApp {
                 sw.on_event(&event);
                 match &event {
                     WindowEvent::CloseRequested => { event_loop.exit(); return; }
+                    WindowEvent::Focused(focused) => {
+                        self.byoh_foreground = *focused;
+                    }
                     WindowEvent::Resized(s) => {
                         if let Some(ctx) = self.ctx.as_ref() {
                             sw.resize(ctx, s.width, s.height);
@@ -316,8 +353,7 @@ impl ApplicationHandler for GpuApp {
                 let ctx = match self.ctx.as_mut() { Some(c) => c, None => return };
                 let ws  = match self.windows.get_mut(&id) { Some(w) => w, None => return };
                 let guard = self.shared.load();
-                let wt_fg = self.wt_foreground.load(std::sync::atomic::Ordering::Relaxed);
-                let rows: &[DisplayRow] = if wt_fg {
+                let rows: &[DisplayRow] = if self.overlays_visible {
                     guard.get(ws.idx).map(|v| v.as_slice()).unwrap_or(&[])
                 } else {
                     &[] // empty rows → renderer paints fully transparent
@@ -369,17 +405,31 @@ impl ApplicationHandler for GpuApp {
         let data_changed  = cur_gen   != self.last_gen;
         let blink_changed = cur_blink != self.last_blink;
 
-        let wt_fg = self.wt_foreground.load(std::sync::atomic::Ordering::Relaxed);
-        let focus_changed = wt_fg != self.overlays_visible;
+        let wt_fg       = self.wt_foreground.load(std::sync::atomic::Ordering::Relaxed);
+        let mission_ok  = self.mission_running.load(std::sync::atomic::Ordering::Relaxed);
+        let byoh_fg     = self.byoh_foreground;
+
+        let should_show = {
+            let cfg = self.app_config.read().map(|g| g.clone()).unwrap_or_default();
+            if cfg.always_show {
+                true
+            } else {
+                let show = wt_fg || (cfg.show_when_byoh_foreground && byoh_fg);
+                let hide = cfg.only_during_mission && !mission_ok;
+                show && !hide
+            }
+        };
+
+        let focus_changed = should_show != self.overlays_visible;
         if focus_changed {
-            self.overlays_visible = wt_fg;
+            self.overlays_visible = should_show;
         }
 
         // Redraw when focus changes (to clear or restore the overlay) or when
-        // data/blink changes while WT is in the foreground.
-        let should_redraw = focus_changed || (wt_fg && (data_changed || blink_changed));
+        // data/blink changes while overlays are visible.
+        let should_redraw = focus_changed || (should_show && (data_changed || blink_changed));
         if should_redraw {
-            if wt_fg {
+            if should_show {
                 self.last_gen   = cur_gen;
                 self.last_blink = cur_blink;
             }
@@ -413,6 +463,14 @@ fn run_gpu_mode() {
     let shared_gen: SharedGen = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let wt_foreground: Arc<std::sync::atomic::AtomicBool> =
         Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mission_running: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let app_config: Arc<std::sync::RwLock<core_client::AppConfig>> =
+        Arc::new(std::sync::RwLock::new(core_client::AppConfig::load()));
+    let reload_requested: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reload_error: Arc<std::sync::Mutex<Option<String>>> =
+        Arc::new(std::sync::Mutex::new(None));
 
     // Build the client on the main thread so we can read fm_version_tag before
     // handing the client off to the poller thread.
@@ -423,16 +481,48 @@ fn run_gpu_mode() {
     let fm_tag = client.fm_version_tag.clone();
 
     {
-        let shared     = shared.clone();
-        let shared_gen = shared_gen.clone();
-        let wt_fg      = wt_foreground.clone();
+        let shared          = shared.clone();
+        let shared_gen      = shared_gen.clone();
+        let wt_fg           = wt_foreground.clone();
+        let mission_flag    = mission_running.clone();
+        let cfg             = app_config.clone();
+        let reload_flag     = reload_requested.clone();
+        let err_slot        = reload_error.clone();
         std::thread::spawn(move || {
+            // Reusable HTTP client for mission polling.
+            let base_url = "http://localhost:8111";
+            let mut last_mission_poll = std::time::Instant::now()
+                - std::time::Duration::from_secs(10); // poll immediately on first tick
+
             loop {
                 let t0 = Instant::now();
+
+                // Handle reload requests from the settings window.
+                if reload_flag.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    match client.reload_window_defs() {
+                        Ok(()) => {
+                            if let Ok(mut lock) = cfg.write() {
+                                *lock = core_client::AppConfig::load();
+                            }
+                        }
+                        Err(msg) => {
+                            if let Ok(mut slot) = err_slot.lock() {
+                                *slot = Some(msg);
+                            }
+                        }
+                    }
+                }
 
                 // Update foreground flag each tick.
                 let fg = platform::is_warthunder_foreground();
                 wt_fg.store(fg, std::sync::atomic::Ordering::Relaxed);
+
+                // Poll mission status at ~1 Hz.
+                if last_mission_poll.elapsed() >= std::time::Duration::from_millis(1000) {
+                    let running = core_client::poll_mission_running(base_url);
+                    mission_flag.store(running, std::sync::atomic::Ordering::Relaxed);
+                    last_mission_poll = std::time::Instant::now();
+                }
 
                 let windows = client.fetch_display_windows();
                 let data: Vec<Vec<DisplayRow>> = windows.into_iter().map(|w| w.rows).collect();
@@ -449,7 +539,17 @@ fn run_gpu_mode() {
 
     let event_loop = EventLoop::new().expect("event loop");
     event_loop
-        .run_app(&mut GpuApp::new(shared, shared_gen, window_defs, fm_tag, wt_foreground))
+        .run_app(&mut GpuApp::new(
+            shared,
+            shared_gen,
+            window_defs,
+            fm_tag,
+            wt_foreground,
+            mission_running,
+            app_config,
+            reload_requested,
+            reload_error,
+        ))
         .expect("run app");
 }
 
@@ -512,16 +612,23 @@ fn main() {
     let shared: Shared = Arc::new(ArcSwap::from_pointee(vec![Vec::new(); n_windows]));
     let wt_foreground: Arc<std::sync::atomic::AtomicBool> =
         Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mission_running: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let app_config = core_client::AppConfig::load();
 
     {
-        let shared = shared.clone();
-        let defs = window_defs.clone();
-        let wt_fg = wt_foreground.clone();
+        let shared       = shared.clone();
+        let defs         = window_defs.clone();
+        let wt_fg        = wt_foreground.clone();
+        let mission_flag = mission_running.clone();
         std::thread::spawn(move || {
             let client = match Client::new_with_windows(defs, None) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("[poller] client init failed: {e}"); return; }
             };
+            let base_url = "http://localhost:8111";
+            let mut last_mission_poll = std::time::Instant::now()
+                - std::time::Duration::from_secs(10);
 
             loop {
                 let t0 = Instant::now();
@@ -529,6 +636,13 @@ fn main() {
                 // Update foreground flag each tick.
                 let fg = win32::is_warthunder_foreground();
                 wt_fg.store(fg, std::sync::atomic::Ordering::Relaxed);
+
+                // Poll mission status at ~1 Hz.
+                if last_mission_poll.elapsed() >= std::time::Duration::from_millis(1000) {
+                    let running = core_client::poll_mission_running(base_url);
+                    mission_flag.store(running, std::sync::atomic::Ordering::Relaxed);
+                    last_mission_poll = std::time::Instant::now();
+                }
 
                 let windows = client.fetch_display_windows();
                 let data: Vec<Vec<DisplayRow>> = windows.into_iter().map(|w| w.rows).collect();
@@ -546,7 +660,7 @@ fn main() {
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop
-        .run_app(&mut OverlayApp::new(shared, window_defs, wt_foreground))
+        .run_app(&mut OverlayApp::new(shared, window_defs, wt_foreground, mission_running, app_config))
         .expect("run app");
 }
 
@@ -573,13 +687,23 @@ struct OverlayApp {
     last_redraw: Instant,
     /// Whether War Thunder is currently the foreground window.
     wt_foreground: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether a mission is actively running (from /mission.json).
+    mission_running: Arc<std::sync::atomic::AtomicBool>,
+    /// Application config loaded at startup.
+    app_config: core_client::AppConfig,
     /// Cached visibility — avoids redundant set_visible calls.
     overlays_visible: bool,
 }
 
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 impl OverlayApp {
-    fn new(shared: Shared, window_defs: Vec<WindowDef>, wt_foreground: Arc<std::sync::atomic::AtomicBool>) -> Self {
+    fn new(
+        shared: Shared,
+        window_defs: Vec<WindowDef>,
+        wt_foreground: Arc<std::sync::atomic::AtomicBool>,
+        mission_running: Arc<std::sync::atomic::AtomicBool>,
+        app_config: core_client::AppConfig,
+    ) -> Self {
         Self {
             shared,
             window_defs,
@@ -587,6 +711,8 @@ impl OverlayApp {
             click_through: false,
             last_redraw: Instant::now(),
             wt_foreground,
+            mission_running,
+            app_config,
             overlays_visible: true,
         }
     }
@@ -676,8 +802,7 @@ impl ApplicationHandler for OverlayApp {
             WindowEvent::RedrawRequested => {
                 if let Some(ws) = self.windows.get(&id) {
                     let guard = self.shared.load();
-                    let wt_fg = self.wt_foreground.load(std::sync::atomic::Ordering::Relaxed);
-                    let rows: &[DisplayRow] = if wt_fg {
+                    let rows: &[DisplayRow] = if self.overlays_visible {
                         guard.get(ws.idx).map(|v| v.as_slice()).unwrap_or(&[])
                     } else {
                         &[] // empty rows → paint_layered writes fully transparent pixels
@@ -694,15 +819,25 @@ impl ApplicationHandler for OverlayApp {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let wt_fg = self.wt_foreground.load(std::sync::atomic::Ordering::Relaxed);
-        let focus_changed = wt_fg != self.overlays_visible;
+        let wt_fg      = self.wt_foreground.load(std::sync::atomic::Ordering::Relaxed);
+        let mission_ok = self.mission_running.load(std::sync::atomic::Ordering::Relaxed);
+
+        let should_show = if self.app_config.always_show {
+            true
+        } else {
+            let show = wt_fg;
+            let hide = self.app_config.only_during_mission && !mission_ok;
+            show && !hide
+        };
+
+        let focus_changed = should_show != self.overlays_visible;
         if focus_changed {
-            self.overlays_visible = wt_fg;
+            self.overlays_visible = should_show;
         }
 
-        // Redraw on focus change (clears or restores) or on the 16ms tick while in focus.
+        // Redraw on focus change (clears or restores) or on the 16ms tick while visible.
         let should_redraw = focus_changed
-            || (wt_fg && self.last_redraw.elapsed() >= Duration::from_millis(16));
+            || (should_show && self.last_redraw.elapsed() >= Duration::from_millis(16));
         if should_redraw {
             self.last_redraw = Instant::now();
             for ws in self.windows.values() {
@@ -801,7 +936,7 @@ fn paint_layered(
 
         // ── create + select font so measurements are accurate ────────────
         use windows::Win32::Graphics::Gdi::{CreateFontW, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-            DEFAULT_PITCH, FF_DONTCARE, OUT_DEFAULT_PRECIS, CLEARTYPE_QUALITY};
+            DEFAULT_PITCH, FF_DONTCARE, OUT_DEFAULT_PRECIS};
         let face: Vec<u16> = "Courier New\0".encode_utf16().collect();
         let hfont = CreateFontW(
             FONT_H, 0, 0, 0,

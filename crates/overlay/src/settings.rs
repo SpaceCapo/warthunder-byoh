@@ -7,7 +7,7 @@
 //! Overlay (indicator) windows use `WS_EX_TOOLWINDOW` / macOS collection
 //! behaviour to stay off the taskbar and dock window list.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, Mutex, atomic::{AtomicBool, Ordering}};
 use winit::{
     event::WindowEvent,
     event_loop::ActiveEventLoop,
@@ -15,6 +15,13 @@ use winit::{
 };
 
 use crate::render_gpu::GpuContext;
+
+/// Which tab is active in the settings window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    Main,
+    Settings,
+}
 
 pub struct SettingsWindow {
     pub window: Arc<Window>,
@@ -29,6 +36,18 @@ pub struct SettingsWindow {
     pub exit_requested: bool,
     /// FM database version tag (e.g. "v2.55.1.88"), empty if unavailable.
     fm_version_tag: String,
+    /// Active tab.
+    active_tab: SettingsTab,
+    /// Shared application config (read/written by the Settings tab).
+    app_config: Arc<RwLock<core_client::AppConfig>>,
+    /// Set to true when the user presses the Reload button; the poller thread
+    /// reads and clears this flag.
+    reload_requested: Arc<AtomicBool>,
+    /// Written by the poller thread when a reload fails; read and cleared here
+    /// to show an error popup.
+    reload_error: Arc<Mutex<Option<String>>>,
+    /// Currently displayed reload-error message (shown in a modal until dismissed).
+    displayed_error: Option<String>,
 }
 
 impl SettingsWindow {
@@ -37,12 +56,15 @@ impl SettingsWindow {
         instance: &wgpu::Instance,
         ctx: &GpuContext,
         fm_version_tag: String,
+        app_config: Arc<RwLock<core_client::AppConfig>>,
+        reload_requested: Arc<AtomicBool>,
+        reload_error: Arc<Mutex<Option<String>>>,
     ) -> Option<Self> {
         let attrs = WindowAttributes::default()
             .with_title("War Thunder BYOH")
             .with_decorations(true)
             .with_resizable(false)
-            .with_inner_size(winit::dpi::LogicalSize::new(420u32, 180u32));
+            .with_inner_size(winit::dpi::LogicalSize::new(420u32, 260u32));
 
         let window = Arc::new(event_loop.create_window(attrs).ok()?);
         let size = window.inner_size();
@@ -90,6 +112,11 @@ impl SettingsWindow {
             show_about: false,
             exit_requested: false,
             fm_version_tag,
+            active_tab: SettingsTab::Main,
+            app_config,
+            reload_requested,
+            reload_error,
+            displayed_error: None,
         })
     }
 
@@ -127,13 +154,51 @@ impl SettingsWindow {
         // without borrowing `self` inside the `run` callback.
         let mut show_about = self.show_about;
         let mut exit_requested = self.exit_requested;
+        let mut active_tab = self.active_tab;
+
+        // Check the reload-error channel; latch any new message into local state.
+        if let Ok(mut slot) = self.reload_error.try_lock() {
+            if slot.is_some() {
+                self.displayed_error = slot.take();
+            }
+        }
+        let mut displayed_error = self.displayed_error.clone();
+
+        // Snapshot the config so the closure can read/mutate a local copy.
+        let mut config = self.app_config
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let mut config_changed = false;
+
+        let reload_requested = self.reload_requested.clone();
 
         let full_output = self.egui_ctx.run(raw_input, |ui_ctx| {
-            build_ui(ui_ctx, &mut show_about, &mut exit_requested, &self.fm_version_tag);
+            build_ui(
+                ui_ctx,
+                &mut show_about,
+                &mut exit_requested,
+                &self.fm_version_tag,
+                &mut active_tab,
+                &mut config,
+                &mut config_changed,
+                &reload_requested,
+                &mut displayed_error,
+            );
         });
+
+        // Write config changes back and persist to disk.
+        if config_changed {
+            if let Ok(mut lock) = self.app_config.write() {
+                *lock = config.clone();
+            }
+            config.save();
+        }
 
         self.show_about = show_about;
         self.exit_requested = exit_requested;
+        self.active_tab = active_tab;
+        self.displayed_error = displayed_error;
 
         self.egui_state.handle_platform_output(&self.window, full_output.platform_output);
 
@@ -185,7 +250,18 @@ impl SettingsWindow {
 }
 
 /// Build the egui UI for the settings window.
-fn build_ui(ctx: &egui::Context, show_about: &mut bool, exit_requested: &mut bool, fm_version_tag: &str) {
+#[allow(clippy::too_many_arguments)]
+fn build_ui(
+    ctx: &egui::Context,
+    show_about: &mut bool,
+    exit_requested: &mut bool,
+    fm_version_tag: &str,
+    active_tab: &mut SettingsTab,
+    config: &mut core_client::AppConfig,
+    config_changed: &mut bool,
+    reload_requested: &Arc<AtomicBool>,
+    displayed_error: &mut Option<String>,
+) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -204,16 +280,79 @@ fn build_ui(ctx: &egui::Context, show_about: &mut bool, exit_requested: &mut boo
     });
 
     egui::CentralPanel::default().show(ctx, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(16.0);
-            ui.heading("War Thunder BYOH (Bring Your Own HUD)");
-            ui.add_space(8.0);
-            ui.label("Thanks for using!  Settings and configuration coming soon.");
-            if !fm_version_tag.is_empty() {
-                ui.add_space(8.0);
-                ui.label(format!("FM database: {fm_version_tag}"));
+        // Tab bar
+        ui.horizontal(|ui| {
+            if ui.selectable_label(*active_tab == SettingsTab::Main, "Main").clicked() {
+                *active_tab = SettingsTab::Main;
+            }
+            if ui.selectable_label(*active_tab == SettingsTab::Settings, "Settings").clicked() {
+                *active_tab = SettingsTab::Settings;
             }
         });
+        ui.separator();
+
+        match active_tab {
+            SettingsTab::Main => {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(12.0);
+                    ui.heading("War Thunder BYOH (Bring Your Own HUD)");
+                    ui.add_space(8.0);
+                    ui.label("Thanks for using!");
+                    if !fm_version_tag.is_empty() {
+                        ui.add_space(8.0);
+                        ui.label(format!("FM database: {fm_version_tag}"));
+                    }
+                });
+            }
+
+            SettingsTab::Settings => {
+                ui.add_space(8.0);
+
+                ui.label("Overlay visibility:");
+                ui.add_space(4.0);
+
+                if ui.checkbox(
+                    &mut config.always_show,
+                    "Always show overlay",
+                ).on_hover_text("Show indicator windows regardless of War Thunder focus or mission state.")
+                .changed() {
+                    *config_changed = true;
+                }
+
+                if ui.checkbox(
+                    &mut config.show_when_byoh_foreground,
+                    "Show overlay when BYOH is focused",
+                ).on_hover_text("Also show indicator windows when this settings window has focus.\nUseful for positioning or testing indicators.")
+                .changed() {
+                    *config_changed = true;
+                }
+
+                // TODO: mission polling is not yet reliable — checkbox hidden until fixed.
+                // if ui.checkbox(
+                //     &mut config.only_during_mission,
+                //     "Only show overlay during active mission",
+                // ).on_hover_text("Hide indicator windows when no mission is running.\nIgnored when \"Always show\" is enabled.")
+                // .changed() {
+                //     *config_changed = true;
+                // }
+
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                if ui.button("Reload indicators & config").clicked() {
+                    reload_requested.store(true, Ordering::Relaxed);
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "Reloads indicators.json and config.json from disk.\n\
+                         Window layout changes (positions, new windows) require a restart."
+                    )
+                    .small()
+                    .weak(),
+                );
+            }
+        }
     });
 
     if *show_about {
@@ -231,6 +370,30 @@ fn build_ui(ctx: &egui::Context, show_about: &mut bool, exit_requested: &mut boo
                     ui.add_space(8.0);
                     if ui.button("  Close  ").clicked() {
                         *show_about = false;
+                    }
+                });
+            });
+    }
+
+    if let Some(msg) = displayed_error.clone() {
+        egui::Window::new("Reload Error")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Failed to reload indicators.json:");
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut msg.as_str())
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                ui.add_space(8.0);
+                ui.vertical_centered(|ui| {
+                    if ui.button("  OK  ").clicked() {
+                        *displayed_error = None;
                     }
                 });
             });

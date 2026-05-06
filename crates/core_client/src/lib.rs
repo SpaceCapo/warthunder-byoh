@@ -816,7 +816,7 @@ type EndpointCache = Arc<RwLock<HashMap<String, JsonValue>>>;
 
 // ── Config loading ────────────────────────────────────────────────────────────
 
-fn find_config(name: &str) -> Option<PathBuf> {
+pub fn find_config(name: &str) -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
         let p = exe_dir.join("data").join(name);
@@ -838,6 +838,15 @@ pub fn load_fields(path: Option<&Path>) -> Vec<FieldDef> {
 }
 
 pub fn load_window_defs(path: Option<&Path>) -> Vec<WindowDef> {
+    match try_load_window_defs(path) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("[core_client] {e}"); Vec::new() }
+    }
+}
+
+/// Like `load_window_defs` but returns a `Result` with a human-readable error
+/// message so callers can surface it to the user.
+pub fn try_load_window_defs(path: Option<&Path>) -> Result<Vec<WindowDef>, String> {
     // If indicators.json doesn't exist yet, seed it from indicators.json.example
     // so the user gets a working default without overwriting any existing config.
     if path.is_none() && find_config("indicators.json").is_none() {
@@ -849,20 +858,114 @@ pub fn load_window_defs(path: Option<&Path>) -> Vec<WindowDef> {
             }
         }
     }
-    let p = path.map(|p| p.to_path_buf()).or_else(|| find_config("indicators.json"));
-    let Some(p) = p else {
-        eprintln!("[core_client] indicators.json not found");
-        return Vec::new();
-    };
-    let text = match std::fs::read_to_string(&p) {
-        Ok(t) => t,
-        Err(e) => { eprintln!("[core_client] read {}: {e}", p.display()); return Vec::new(); }
-    };
+    let p = path.map(|p| p.to_path_buf()).or_else(|| find_config("indicators.json"))
+        .ok_or_else(|| "indicators.json not found".to_string())?;
+    let text = std::fs::read_to_string(&p)
+        .map_err(|e| format!("could not read {}: {e}", p.display()))?;
     let stripped = json_comments::StripComments::new(text.as_bytes());
-    match serde_json::from_reader::<_, Vec<WindowDef>>(stripped) {
-        Ok(v) => v,
-        Err(e) => { eprintln!("[core_client] parse indicators.json: {e}"); Vec::new() }
+    serde_json::from_reader::<_, Vec<WindowDef>>(stripped)
+        .map_err(|e| format!("parse error in {}: {e}", p.display()))
+}
+
+// ── App configuration ─────────────────────────────────────────────────────────
+
+/// Persistent application settings stored in `config.json`.
+///
+/// Every field carries `#[serde(default)]` so that older config files missing
+/// new keys are silently filled with sane defaults on load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    /// Show indicator overlays regardless of whether War Thunder is in the
+    /// foreground.  Overrides all other visibility conditions.
+    #[serde(default)]
+    pub always_show: bool,
+
+    /// Also show indicator overlays when the BYOH settings window has keyboard
+    /// focus.  Useful for positioning indicators or debugging formulas.
+    #[serde(default)]
+    pub show_when_byoh_foreground: bool,
+
+    /// Hide indicator overlays unless `/mission.json` reports `status: "running"`.
+    /// Ignored when `always_show` is `true`.
+    #[serde(default)]
+    pub only_during_mission: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            always_show: false,
+            show_when_byoh_foreground: false,
+            only_during_mission: false,
+        }
     }
+}
+
+impl AppConfig {
+    /// Load from the default `config.json` location.  Returns `Default` if the
+    /// file does not exist or cannot be parsed.
+    pub fn load() -> Self {
+        let Some(p) = find_config("config.json") else { return Self::default() };
+        let text = match std::fs::read_to_string(&p) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[config] read {}: {e}", p.display());
+                return Self::default();
+            }
+        };
+        match serde_json::from_str(&text) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[config] parse config.json: {e}");
+                Self::default()
+            }
+        }
+    }
+
+    /// Save to `config.json` in the same directory as `indicators.json`,
+    /// falling back to the executable directory.
+    pub fn save(&self) {
+        let path = if let Some(p) = find_config("config.json") {
+            p
+        } else if let Some(p) = find_config("indicators.json") {
+            p.with_file_name("config.json")
+        } else if let Ok(exe) = std::env::current_exe() {
+            exe.with_file_name("config.json")
+        } else {
+            PathBuf::from("config.json")
+        };
+        match serde_json::to_string_pretty(self) {
+            Ok(text) => {
+                if let Err(e) = std::fs::write(&path, text) {
+                    eprintln!("[config] write {}: {e}", path.display());
+                }
+            }
+            Err(e) => eprintln!("[config] serialize config: {e}"),
+        }
+    }
+}
+
+/// Poll `/mission.json` and return `true` when a mission is actively running.
+///
+/// Uses a blocking HTTP GET with a 500 ms timeout; intended to be called from
+/// a background thread at a low rate (~1 Hz is plenty).  Returns `false` on
+/// any network error (game offline, timeout, etc.).
+pub fn poll_mission_running(base_url: &str) -> bool {
+    let url = format!("{}/mission.json", base_url.trim_end_matches('/'));
+    let http = reqwest::blocking::ClientBuilder::new()
+        .timeout(std::time::Duration::from_millis(500))
+        .build()
+        .unwrap_or_default();
+    http.get(&url)
+        .send()
+        .ok()
+        .and_then(|r| r.json::<JsonValue>().ok())
+        .and_then(|j| {
+            j.get("status")
+                .and_then(|s| s.as_str())
+                .map(|s| s == "running")
+        })
+        .unwrap_or(false)
 }
 
 // ── Calculator ────────────────────────────────────────────────────────────────
@@ -1008,7 +1111,7 @@ impl DerivedState {
 
 pub struct Client {
     fields: Vec<FieldDef>,
-    windows: Vec<(WindowDef, Calculator)>,
+    windows: Mutex<Vec<(WindowDef, Calculator)>>,
     mode: FetchMode,
     fm_db: Arc<FmDb>,
     derived: Mutex<DerivedState>,
@@ -1124,7 +1227,7 @@ impl Client {
 
         Ok(Self {
             fields,
-            windows,
+            windows: Mutex::new(windows),
             mode: FetchMode::Background { endpoint_cache },
             fm_db,
             derived: Mutex::new(DerivedState::new()),
@@ -1160,7 +1263,7 @@ impl Client {
             .collect();
         Self {
             fields,
-            windows,
+            windows: Mutex::new(windows),
             mode: FetchMode::Sync {
                 http,
                 base_url,
@@ -1347,7 +1450,8 @@ impl Client {
         let frame = self.fetch_raw();
         let offline = frame.is_empty();
 
-        self.windows.iter().map(|(wd, calc)| {
+        let windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        windows.iter().map(|(wd, calc)| {
             let rows = if offline {
                 vec![DisplayRow {
                     label: "WT".into(), value_str: "offline".into(),
@@ -1374,6 +1478,31 @@ impl Client {
     /// Convenience: flatten all windows into one row list (used by CLI).
     pub fn fetch_display_rows(&self) -> Vec<DisplayRow> {
         self.fetch_display_windows().into_iter().flat_map(|w| w.rows).collect()
+    }
+
+    /// Reload `indicators.json` from disk and replace the calculator set
+    /// in-place.  The existing background fetch threads continue running
+    /// (their cached data remains valid); only the display formula/threshold
+    /// logic is updated.  Window layout changes (new windows, repositioning)
+    /// require an application restart.
+    /// Reload `indicators.json` from disk and hot-swap the calculator set.
+    ///
+    /// Returns `Ok(())` on success.  On any parse or I/O error the existing
+    /// windows are left unchanged and a human-readable message is returned as
+    /// `Err(String)` so the caller can surface it to the user.
+    pub fn reload_window_defs(&self) -> Result<(), String> {
+        let new_defs = try_load_window_defs(None)?;
+        let new_windows: Vec<(WindowDef, Calculator)> = new_defs
+            .into_iter()
+            .map(|wd| {
+                let calc = Calculator::new(wd.indicators.clone());
+                (wd, calc)
+            })
+            .collect();
+        if let Ok(mut lock) = self.windows.lock() {
+            *lock = new_windows;
+        }
+        Ok(())
     }
 }
 
