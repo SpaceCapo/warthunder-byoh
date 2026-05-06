@@ -14,6 +14,8 @@ Displays real-time flight data, vehicle statistics, and session information dire
 - **Data-driven indicators** — define any combination of fields via `indicators.json`; supports expressions, thresholds, and colour tokens
 - **Two render backends** — GPU path (wgpu + egui, default) and a lightweight GDI fallback for Windows
 - **~60 Hz display, ~6 Hz data** — overlay renders smoothly from a cached snapshot; no HTTP on the render hot path
+ - **Settings window + hot-reload** — GPU builds include a settings window with a simple Settings tab and a "Reload indicators & config" button. Reload validates the files before applying so invalid JSON or expression errors won't replace your running configuration. If reload fails you'll see an error dialog with details.
+ - **Persistent config** — `config.json` (next to `indicators.json`) stores visibility preferences (eg. `always_show`, `show_when_byoh_foreground`, `only_during_mission`). The settings UI exposes the most-used toggles; the mission-only toggle is currently hidden in the UI while mission-polling is stabilised but the config key remains supported.
 - **Flight model database** — CSV database of 1,537 aircraft with display names, types, and performance parameters; auto-updates from [warthunder-byo-fm](https://github.com/SpaceCapo/warthunder-byo-fm) releases on startup
 - **Field catalog** — scraped catalog of all known War Thunder local API fields (`data/fields.json`)
 - **Cross-platform** — builds for Windows (x86_64), Linux (glibc and musl static), and macOS via Docker cross-compilation
@@ -136,6 +138,21 @@ Overlay windows and indicators are defined in `indicators.json`. Copy `indicator
 ```
 
 Available fields are listed in `data/fields.json`. Use `expr` to combine or transform values with standard arithmetic expressions.
+
+Persistent application settings are stored in `config.json`. A starter example is provided at `config.json.example` (repo root) — copy it next to `indicators.json` or into the executable directory as `config.json` to customize behaviour. Example:
+
+```json
+{
+  "always_show": false,
+  "show_when_byoh_foreground": false,
+  "only_during_mission": false
+}
+```
+
+Meaning:
+- `always_show`: overlay remains visible regardless of War Thunder focus/mission state.
+- `show_when_byoh_foreground`: also show overlay while the BYOH settings window has focus (useful for positioning).
+- `only_during_mission`: hide the overlay when `/mission.json` does not report `status: "running"` (the key is supported but the checkbox is currently hidden in the UI while mission polling is stabilised).
 
 ---
 
