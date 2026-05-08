@@ -193,17 +193,30 @@ jobs:
         run: |
           mkdir release-files
           find . -type f \( -name "*.tgz" -o -name "*.zip" \) -exec mv -v {} release-files/ \;
+      - name: Get previous release tag
+        id: prev_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+
+          PREV_TAG=$(gh api \
+            repos/${{ github.repository }}/releases \
+            --jq 'map(select(.tag_name != "'"$CURRENT_TAG"'")) | first | .tag_name')
+
+          echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"  
       - name: Generate Auto-Generated Release Notes
         id: autonotes
         run: |
-          curl -s \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -X POST \
-            https://api.github.com/repos/${{ github.repository }}/releases/generate-notes \
-            -d '{
-              "tag_name": "${{ github.ref_name }}",
-              "target_commitish": "main"
-            }' | jq -r '.body' > auto_notes.md
+          git log "${{ steps.prev_release.outputs.prev_tag }}..HEAD" \
+          --pretty=format:'%H' \
+          | while read sha; do
+            AUTHOR=$(gh api repos/${GITHUB_REPOSITORY}/commits/$sha --jq '.author.login // .commit.author.name')
+            SUBJECT=$(git log -1 --pretty=%s $sha)
+            SHORT=$(git rev-parse --short $sha)
+
+            echo "- $SUBJECT — @$AUTHOR ($SHORT)"
+          done > auto_notes.md
       - name: Build Final Release Notes
         id: finalnotes
         run: |
@@ -224,6 +237,4 @@ jobs:
           files: release-files/*
           generate_release_notes: true
           body_path: body.md
-
-
-
+          previous_tag: ${{ steps.prev_release.outputs.prev_tag }}

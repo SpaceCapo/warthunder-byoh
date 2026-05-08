@@ -297,9 +297,12 @@ fn build_ui(
                     ui.add_space(12.0);
                     ui.heading("War Thunder BYOH (Bring Your Own HUD)");
                     ui.add_space(8.0);
-                    ui.label("Thanks for using!");
+                    ui.label(
+                        egui::RichText::new(concat!("Build: ", env!("BYOH_BUILD_VERSION")))
+                            .weak()
+                    );
                     if !fm_version_tag.is_empty() {
-                        ui.add_space(8.0);
+                        ui.add_space(4.0);
                         ui.label(format!("FM database: {fm_version_tag}"));
                     }
                 });
@@ -363,7 +366,7 @@ fn build_ui(
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.heading("War Thunder BYOH");
-                    ui.label(concat!("Version ", env!("CARGO_PKG_VERSION")));
+                    ui.label(concat!("Build: ", env!("BYOH_BUILD_VERSION")));
                     ui.add_space(8.0);
                     ui.label("A local War Thunder overlay and telemetry tool.");
                     ui.label("Data sourced exclusively from the game's local HTTP API.");
