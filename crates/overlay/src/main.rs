@@ -575,6 +575,7 @@ fn setup_console() {
 
 #[cfg(feature = "gpu")]
 fn main() {
+    eprintln!("warthunder-byoh {}", env!("BYOH_BUILD_VERSION"));
     #[cfg(feature = "windows-glue")]
     setup_console();
     run_gpu_mode();
@@ -602,6 +603,7 @@ type Shared = Arc<ArcSwap<Vec<Vec<DisplayRow>>>>;
 
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 fn main() {
+    eprintln!("warthunder-byoh {}", env!("BYOH_BUILD_VERSION"));
     setup_console();
     let window_defs = core_client::load_window_defs(None);
     if window_defs.is_empty() {
@@ -1178,12 +1180,13 @@ mod win32 {
 
 #[cfg(all(feature = "render", not(feature = "windows-glue"), not(feature = "gpu")))]
 fn main() {
-    eprintln!("Linux overlay not yet implemented — running CLI poller");
+    eprintln!("warthunder-byoh {} — Linux overlay not yet implemented, running CLI poller", env!("BYOH_BUILD_VERSION"));
     run_cli_mode();
 }
 
 #[cfg(not(feature = "render"))]
 fn main() {
+    eprintln!("warthunder-byoh {}", env!("BYOH_BUILD_VERSION"));
     run_cli_mode();
 }
 

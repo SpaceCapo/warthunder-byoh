@@ -4,6 +4,32 @@ BIN         := warthunder-byoh
 RELEASE_DIR := release
 MACOS_SDK_DEFAULT=/tmp/MacOSX26.1.sdk.tar.xz
 
+# ── Git-derived build version (computed on the host, before Docker runs) ───────
+# Mirrors the logic in crates/overlay/build.rs:
+#   exact tag → branch-sha[+dirty] (non-main) → sha[+dirty] → YYYYmmdd-HHmmss
+# Passed into Docker containers as GIT_VERSION so build.rs can embed it even
+# when git's safe.directory check would reject the mounted workspace.
+GIT_VERSION := $(shell \
+  if tag=$$(git describe --tags --exact-match 2>/dev/null); then \
+    printf '%s' "$$tag"; \
+  elif git rev-parse --git-dir >/dev/null 2>&1; then \
+    branch=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
+    sha=$$(git rev-parse --short HEAD 2>/dev/null || true); \
+    if [ -n "$$sha" ]; then \
+      dirty=$$(git status --porcelain --untracked-files=no 2>/dev/null); \
+      [ -n "$$dirty" ] && s="+dirty" || s=""; \
+      if [ "$$branch" != "main" ] && [ "$$branch" != "HEAD" ] && [ -n "$$branch" ]; then \
+        printf '%s-%s%s' "$$branch" "$$sha" "$$s"; \
+      else \
+        printf '%s%s' "$$sha" "$$s"; \
+      fi; \
+    else \
+      date +%Y%m%d-%H%M%S; \
+    fi; \
+  else \
+    date +%Y%m%d-%H%M%S; \
+  fi)
+
 ICON_SRC   := crates/overlay/assets/icon_source.png
 ICON_ICO   := crates/overlay/assets/icon.ico
 ICON_ICNS  := crates/overlay/assets/app.icns
@@ -14,7 +40,7 @@ ICON_DIR   := crates/overlay/assets/icons
 # Both persist across `docker run --rm` invocations so incremental builds are fast.
 CARGO_REG_VOL  := cargo-registry
 TARGET_VOL     := wt-target
-DOCKER_CACHE   := -v $(CARGO_REG_VOL):/cargo-reg -e CARGO_HOME=/cargo-reg -v $(TARGET_VOL):/work/target
+DOCKER_CACHE   := -v $(CARGO_REG_VOL):/cargo-reg -e CARGO_HOME=/cargo-reg -v $(TARGET_VOL):/work/target -e GIT_VERSION="$(GIT_VERSION)"
 
 .PHONY: all linux linux-gpu linux-musl linux-pkg windows windows-deploy windows-gpu gpu-deploy macos mac-app icons build-scraper clean fetch-fm
 
