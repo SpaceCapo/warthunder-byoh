@@ -43,6 +43,7 @@
                 "label": "CAOA",
                 "formula": "math::abs(aoa_deg) / fm_crit_aoa_pos * 100",
                 "format": "integer",
+                "unit": "%",
                 "show_when": "valid",
                 "warn_above": 60,
                 "crit_above": 80
