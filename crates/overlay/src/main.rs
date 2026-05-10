@@ -54,6 +54,7 @@ mod settings;
 use {
     arc_swap::ArcSwap,
     std::collections::HashMap,
+    std::path::PathBuf,
     winit::{
         application::ApplicationHandler,
         dpi::{LogicalPosition, LogicalSize},
@@ -124,6 +125,12 @@ struct GpuApp {
     reload_error: Arc<std::sync::Mutex<Option<String>>>,
     /// Cached visibility state — avoids redundant set_visible calls.
     overlays_visible: bool,
+    /// Resolved path to indicators.json — used to persist moved positions.
+    indicators_path: Option<PathBuf>,
+    /// True when at least one window has been moved since the last save.
+    position_dirty: bool,
+    /// Instant of the most recent WindowEvent::Moved — used to debounce writes.
+    last_move_at: Option<Instant>,
 }
 
 #[cfg(feature = "gpu")]
@@ -138,6 +145,7 @@ impl GpuApp {
         app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
         reload_requested: Arc<std::sync::atomic::AtomicBool>,
         reload_error: Arc<std::sync::Mutex<Option<String>>>,
+        indicators_path: Option<PathBuf>,
     ) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         Self {
@@ -160,7 +168,27 @@ impl GpuApp {
             reload_requested,
             reload_error,
             overlays_visible: true,
+            indicators_path,
+            position_dirty: false,
+            last_move_at: None,
         }
+    }
+}
+
+#[cfg(feature = "gpu")]
+impl GpuApp {
+    /// Flush in-memory positions to `indicators.json` if any window was moved.
+    /// Clears the dirty flag on success or after logging the error.
+    fn save_positions_if_dirty(&mut self) {
+        if !self.position_dirty { return; }
+        if let Some(path) = &self.indicators_path {
+            match core_client::save_window_defs(path, &self.window_defs) {
+                Ok(()) => eprintln!("[gpu] positions saved to {}", path.display()),
+                Err(e) => eprintln!("[gpu] could not save positions: {e}"),
+            }
+        }
+        self.position_dirty = false;
+        self.last_move_at = None;
     }
 }
 
@@ -282,38 +310,77 @@ impl ApplicationHandler for GpuApp {
         id: WindowId,
         event: WindowEvent,
     ) {
-        // Route to the settings window if the event belongs to it.
-        if let Some(sw) = self.settings_win.as_mut() {
-            if id == sw.window_id() {
+        // ── Settings window routing ─────────────────────────────────────────────
+        // Use flags instead of early-returns so that the settings_win borrow is
+        // released before we call save_positions_if_dirty() (which needs &mut self).
+        let is_settings = self.settings_win.as_ref().map_or(false, |sw| id == sw.window_id());
+        if is_settings {
+            let mut do_exit   = false;
+            let mut do_redraw = false;
+            if let Some(sw) = self.settings_win.as_mut() {
                 sw.on_event(&event);
                 match &event {
-                    WindowEvent::CloseRequested => { event_loop.exit(); return; }
-                    WindowEvent::Focused(focused) => {
-                        self.byoh_foreground = *focused;
-                    }
+                    WindowEvent::CloseRequested => { do_exit = true; }
+                    WindowEvent::Focused(focused) => { self.byoh_foreground = *focused; }
                     WindowEvent::Resized(s) => {
                         if let Some(ctx) = self.ctx.as_ref() {
                             sw.resize(ctx, s.width, s.height);
                         }
                     }
-                    WindowEvent::RedrawRequested => {
-                        if let Some(ctx) = self.ctx.as_ref() {
-                            // Take to avoid simultaneous borrow of ctx + settings_win.
-                            if let Some(mut sw) = self.settings_win.take() {
-                                sw.render(ctx);
-                                if sw.exit_requested { event_loop.exit(); return; }
-                                self.settings_win = Some(sw);
-                            }
-                        }
-                    }
+                    WindowEvent::RedrawRequested => { do_redraw = true; }
                     _ => {}
                 }
+            }
+            // settings_win borrow fully released — all of self is writable again.
+            if do_exit {
+                self.save_positions_if_dirty();
+                event_loop.exit();
                 return;
             }
+            if do_redraw {
+                // Resolve whether the exit button was pressed while ctx is borrowed,
+                // then act on it after the ctx borrow is released.
+                let should_exit = if let Some(ctx) = self.ctx.as_ref() {
+                    if let Some(mut sw) = self.settings_win.take() {
+                        sw.render(ctx);
+                        let exit = sw.exit_requested;
+                        self.settings_win = Some(sw);
+                        exit
+                    } else { false }
+                } else { false };
+                // ctx borrow released; safe to call save_positions_if_dirty.
+                if should_exit {
+                    self.save_positions_if_dirty();
+                    event_loop.exit();
+                    return;
+                }
+            }
+            return;
         }
 
+        // ── Overlay window events ───────────────────────────────────────────────
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.save_positions_if_dirty();
+                event_loop.exit();
+            }
+
+            // Track position changes from left-click drags so we can persist them.
+            WindowEvent::Moved(pos) => {
+                // Extract scale + idx without holding a borrow across the
+                // mutable window_defs access.
+                let move_info = self.windows.get(&id)
+                    .map(|ws| (ws.idx, ws.window.scale_factor()));
+                if let Some((idx, scale)) = move_info {
+                    let lp: winit::dpi::LogicalPosition<f64> = pos.to_logical(scale);
+                    if let Some(wd) = self.window_defs.get_mut(idx) {
+                        wd.x = lp.x.round() as i32;
+                        wd.y = lp.y.round() as i32;
+                        self.position_dirty = true;
+                        self.last_move_at   = Some(Instant::now());
+                    }
+                }
+            }
 
             WindowEvent::Resized(new_size) => {
                 if let (Some(ws), Some(ctx)) = (self.windows.get_mut(&id), self.ctx.as_ref()) {
@@ -444,6 +511,16 @@ impl ApplicationHandler for GpuApp {
             sw.window.request_redraw();
         }
 
+        // Debounced position save: flush to indicators.json 800 ms after the
+        // last drag so the file isn't hammered on every pixel of movement.
+        if self.position_dirty {
+            if let Some(last) = self.last_move_at {
+                if last.elapsed() >= Duration::from_millis(800) {
+                    self.save_positions_if_dirty();
+                }
+            }
+        }
+
         // Sleep until next potential update — avoids busy-spinning the event loop.
         let next_wake = now + Duration::from_millis(FRAME_MS);
         event_loop.set_control_flow(ControlFlow::WaitUntil(next_wake));
@@ -455,6 +532,9 @@ impl ApplicationHandler for GpuApp {
 #[cfg(feature = "gpu")]
 fn run_gpu_mode() {
     let window_defs = core_client::load_window_defs(None);
+    // Resolve the path now (load_window_defs may have just seeded the file from
+    // the example, so find_config is guaranteed to find it if the load succeeded).
+    let indicators_path = core_client::find_config("indicators.json");
     if window_defs.is_empty() {
         eprintln!("[gpu] no windows defined in indicators.json — using fallback");
     }
@@ -549,6 +629,7 @@ fn run_gpu_mode() {
             app_config,
             reload_requested,
             reload_error,
+            indicators_path,
         ))
         .expect("run app");
 }
