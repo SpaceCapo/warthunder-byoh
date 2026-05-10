@@ -188,6 +188,10 @@ pub struct RenderStyle {
     pub col_gap: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub c_label: Option<OverlayColor>,
+    /// Color for value column text when the row is in the normal ("value") state.
+    /// Defaults to the same color as `c_label` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_value: Option<OverlayColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub c_unit: Option<OverlayColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

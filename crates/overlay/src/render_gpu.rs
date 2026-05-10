@@ -40,6 +40,7 @@ pub struct ResolvedStyle {
     pub pad_y:       f32,
     pub col_gap:     f32,
     pub c_label:  Color,
+    pub c_value:  Color,
     pub c_unit:   Color,
     pub c_warn:   Color,
     pub c_crit:   Color,
@@ -57,6 +58,7 @@ impl ResolvedStyle {
             pad_y:       10.0,
             col_gap:     12.0,
             c_label:  Color::rgb(255, 255, 255),
+            c_value:  Color::rgb(255, 255, 255),
             c_unit:   Color::rgb(192, 192, 192),
             c_warn:   Color::rgb(220,  60,  60),
             c_crit:   Color::rgb(220,  60,  60),
@@ -81,6 +83,7 @@ impl ResolvedStyle {
     pub fn apply_colors(&self, style: &core_client::RenderStyle) -> Self {
         let mut r = self.clone();
         if let Some(c) = style.c_label  { r.c_label  = oc(c); }
+        if let Some(c) = style.c_value  { r.c_value  = oc(c); }
         if let Some(c) = style.c_unit   { r.c_unit   = oc(c); }
         if let Some(c) = style.c_warn   { r.c_warn   = oc(c); }
         if let Some(c) = style.c_crit   { r.c_crit   = oc(c); }
@@ -93,11 +96,12 @@ impl ResolvedStyle {
     /// Map a color token to the appropriate resolved color.
     pub fn token_to_color(&self, token: &str) -> Color {
         match token {
-            "warn" => self.c_warn,
-            "crit" => self.c_crit,
-            "good" => self.c_good,
-            "info" => self.c_info,
-            _      => self.c_label,
+            "value" => self.c_value,
+            "warn"  => self.c_warn,
+            "crit"  => self.c_crit,
+            "good"  => self.c_good,
+            "info"  => self.c_info,
+            _       => self.c_label,
         }
     }
 }

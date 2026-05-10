@@ -717,6 +717,7 @@ fn main() {
 use {
     arc_swap::ArcSwap,
     std::collections::HashMap,
+    std::path::PathBuf,
     winit::{
         application::ApplicationHandler,
         dpi::{LogicalPosition, LogicalSize},
@@ -740,6 +741,8 @@ fn main() {
         eprintln!("[overlay] no windows defined in indicators.json — using a single empty fallback");
     }
 
+    let indicators_path = core_client::find_config("indicators.json");
+
     let initial_windows: Vec<core_client::WindowRows> = window_defs.iter().map(|wd| {
         core_client::WindowRows {
             id: wd.id.clone(),
@@ -754,13 +757,21 @@ fn main() {
         Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mission_running: Arc<std::sync::atomic::AtomicBool> =
         Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let app_config = core_client::AppConfig::load();
+    let app_config: Arc<std::sync::RwLock<core_client::AppConfig>> =
+        Arc::new(std::sync::RwLock::new(core_client::AppConfig::load()));
+    let reload_requested: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pending_window_defs: Arc<std::sync::Mutex<Option<Vec<WindowDef>>>> =
+        Arc::new(std::sync::Mutex::new(None));
 
     {
-        let shared       = shared.clone();
-        let defs         = window_defs.clone();
-        let wt_fg        = wt_foreground.clone();
-        let mission_flag = mission_running.clone();
+        let shared          = shared.clone();
+        let defs            = window_defs.clone();
+        let wt_fg           = wt_foreground.clone();
+        let mission_flag    = mission_running.clone();
+        let reload_flag     = reload_requested.clone();
+        let pending_defs    = pending_window_defs.clone();
+        let app_cfg         = app_config.clone();
         std::thread::spawn(move || {
             let client = match Client::new_with_windows(defs, None) {
                 Ok(c) => c,
@@ -772,6 +783,24 @@ fn main() {
 
             loop {
                 let t0 = Instant::now();
+
+                // Handle F5 reload requests.
+                if reload_flag.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    match client.reload_window_defs() {
+                        Ok(new_defs) => {
+                            if let Ok(mut lock) = app_cfg.write() {
+                                *lock = core_client::AppConfig::load();
+                            }
+                            if let Ok(mut slot) = pending_defs.lock() {
+                                *slot = Some(new_defs);
+                            }
+                            eprintln!("[overlay] reload OK");
+                        }
+                        Err(msg) => {
+                            eprintln!("[overlay] reload error: {msg}");
+                        }
+                    }
+                }
 
                 // Update foreground flag each tick.
                 let fg = win32::is_warthunder_foreground();
@@ -799,7 +828,16 @@ fn main() {
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop
-        .run_app(&mut OverlayApp::new(shared, window_defs, wt_foreground, mission_running, app_config))
+        .run_app(&mut OverlayApp::new(
+            shared,
+            window_defs,
+            wt_foreground,
+            mission_running,
+            app_config,
+            reload_requested,
+            pending_window_defs,
+            indicators_path,
+        ))
         .expect("run app");
 }
 
@@ -817,7 +855,7 @@ struct WinState {
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 struct OverlayApp {
     shared: Shared,
-    /// Window configs from indicators.json (used for initial creation).
+    /// Window configs from indicators.json (used for initial creation and position save).
     window_defs: Vec<WindowDef>,
     /// Live window states, keyed by winit WindowId.
     windows: HashMap<WindowId, WinState>,
@@ -828,10 +866,20 @@ struct OverlayApp {
     wt_foreground: Arc<std::sync::atomic::AtomicBool>,
     /// Whether a mission is actively running (from /mission.json).
     mission_running: Arc<std::sync::atomic::AtomicBool>,
-    /// Application config loaded at startup.
-    app_config: core_client::AppConfig,
+    /// Application config — shared with the poller thread so hot-reload works.
+    app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
+    /// Set by the F5 key; cleared by the poller thread after reload.
+    reload_requested: Arc<std::sync::atomic::AtomicBool>,
+    /// Fresh WindowDefs written by the poller on a successful reload.
+    pending_window_defs: Arc<std::sync::Mutex<Option<Vec<WindowDef>>>>,
     /// Cached visibility — avoids redundant set_visible calls.
     overlays_visible: bool,
+    /// Resolved path to indicators.json — used to persist moved positions.
+    indicators_path: Option<PathBuf>,
+    /// True when at least one window has been moved since the last save.
+    position_dirty: bool,
+    /// Instant of the most recent WindowEvent::Moved — used to debounce writes.
+    last_move_at: Option<Instant>,
 }
 
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
@@ -841,7 +889,10 @@ impl OverlayApp {
         window_defs: Vec<WindowDef>,
         wt_foreground: Arc<std::sync::atomic::AtomicBool>,
         mission_running: Arc<std::sync::atomic::AtomicBool>,
-        app_config: core_client::AppConfig,
+        app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
+        reload_requested: Arc<std::sync::atomic::AtomicBool>,
+        pending_window_defs: Arc<std::sync::Mutex<Option<Vec<WindowDef>>>>,
+        indicators_path: Option<PathBuf>,
     ) -> Self {
         Self {
             shared,
@@ -852,8 +903,28 @@ impl OverlayApp {
             wt_foreground,
             mission_running,
             app_config,
+            reload_requested,
+            pending_window_defs,
             overlays_visible: true,
+            indicators_path,
+            position_dirty: false,
+            last_move_at: None,
         }
+    }
+}
+
+#[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
+impl OverlayApp {
+    fn save_positions_if_dirty(&mut self) {
+        if !self.position_dirty { return; }
+        if let Some(path) = &self.indicators_path {
+            match core_client::save_window_defs(path, &self.window_defs) {
+                Ok(()) => eprintln!("[overlay] positions saved to {}", path.display()),
+                Err(e) => eprintln!("[overlay] could not save positions: {e}"),
+            }
+        }
+        self.position_dirty = false;
+        self.last_move_at = None;
     }
 }
 
@@ -913,7 +984,34 @@ impl ApplicationHandler for OverlayApp {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.save_positions_if_dirty();
+                event_loop.exit();
+            }
+
+            // Track position changes from left-click drags.
+            WindowEvent::Moved(pos) => {
+                let move_info = self.windows.get(&id)
+                    .map(|ws| (ws.idx, ws.window.scale_factor()));
+                if let Some((idx, scale)) = move_info {
+                    let lp: winit::dpi::LogicalPosition<f64> = pos.to_logical(scale);
+                    if let Some(wd) = self.window_defs.get_mut(idx) {
+                        wd.x = lp.x.round() as i32;
+                        wd.y = lp.y.round() as i32;
+                        self.position_dirty = true;
+                        self.last_move_at   = Some(Instant::now());
+                    }
+                }
+            }
+
+            // F5 — request a config reload.
+            WindowEvent::KeyboardInput { event: ref key_event, .. }
+                if key_event.state == ElementState::Pressed
+                    && key_event.physical_key == PhysicalKey::Code(KeyCode::F5) =>
+            {
+                self.reload_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                eprintln!("[overlay] reload requested via F5");
+            }
 
             WindowEvent::KeyboardInput { event: ref key_event, .. }
                 if key_event.state == ElementState::Pressed
@@ -967,12 +1065,15 @@ impl ApplicationHandler for OverlayApp {
         let wt_fg      = self.wt_foreground.load(std::sync::atomic::Ordering::Relaxed);
         let mission_ok = self.mission_running.load(std::sync::atomic::Ordering::Relaxed);
 
-        let should_show = if self.app_config.always_show {
-            true
-        } else {
-            let show = wt_fg;
-            let hide = self.app_config.only_during_mission && !mission_ok;
-            show && !hide
+        let should_show = {
+            let cfg = self.app_config.read().map(|g| g.clone()).unwrap_or_default();
+            if cfg.always_show {
+                true
+            } else {
+                let show = wt_fg;
+                let hide = cfg.only_during_mission && !mission_ok;
+                show && !hide
+            }
         };
 
         let focus_changed = should_show != self.overlays_visible;
@@ -987,6 +1088,34 @@ impl ApplicationHandler for OverlayApp {
             self.last_redraw = Instant::now();
             for ws in self.windows.values() {
                 ws.window.request_redraw();
+            }
+        }
+
+        // Debounced position save: flush 800 ms after the last drag.
+        if self.position_dirty {
+            if let Some(last) = self.last_move_at {
+                if last.elapsed() >= Duration::from_millis(800) {
+                    self.save_positions_if_dirty();
+                }
+            }
+        }
+
+        // Apply fresh WindowDefs from a successful F5 reload.
+        // Preserve any drag-modified positions currently in memory.
+        if let Ok(mut slot) = self.pending_window_defs.lock() {
+            if let Some(new_defs) = slot.take() {
+                let positions: std::collections::HashMap<String, (i32, i32)> = self
+                    .window_defs.iter()
+                    .map(|w| (w.id.clone(), (w.x, w.y)))
+                    .collect();
+                self.window_defs = new_defs.into_iter().map(|mut wd| {
+                    if let Some(&(x, y)) = positions.get(&wd.id) {
+                        wd.x = x;
+                        wd.y = y;
+                    }
+                    wd
+                }).collect();
+                eprintln!("[overlay] window defs reloaded");
             }
         }
     }
@@ -1009,6 +1138,8 @@ const COL_GAP: i32 = 12;
 // Colors as GDI COLORREF: 0x00BBGGRR
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 const C_LABEL:  u32 = 0x00_FF_FF_FF;
+#[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
+const C_VALUE:  u32 = 0x00_FF_FF_FF; // default same as label; overridden by c_value in style
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 const C_UNIT:   u32 = 0x00_C0_C0_C0;
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
@@ -1076,24 +1207,25 @@ fn paint_layered(
 
     // Resolve window-level colors from win_style, fall back to compile-time defaults.
     let wc_label:  u32 = win_style.and_then(|s| s.c_label ).map(oc_ref).unwrap_or(C_LABEL);
+    let wc_value:  u32 = win_style.and_then(|s| s.c_value ).map(oc_ref).unwrap_or(C_VALUE);
     let wc_unit:   u32 = win_style.and_then(|s| s.c_unit  ).map(oc_ref).unwrap_or(C_UNIT);
     let wc_warn:   u32 = win_style.and_then(|s| s.c_warn  ).map(oc_ref).unwrap_or(C_WARN);
     let wc_crit:   u32 = win_style.and_then(|s| s.c_crit  ).map(oc_ref).unwrap_or(C_CRIT);
     let wc_good:   u32 = win_style.and_then(|s| s.c_good  ).map(oc_ref).unwrap_or(C_GOOD);
     let wc_info:   u32 = win_style.and_then(|s| s.c_info  ).map(oc_ref).unwrap_or(C_INFO);
     let wc_shadow: u32 = win_style.and_then(|s| s.c_shadow).map(oc_ref).unwrap_or(C_SHADOW);
-    let wc_value:  u32 = wc_label; // "value" token uses label color
 
     // Map a token string + per-row style to a COLORREF.
     let resolve_token = |token: &str, row_style: Option<&core_client::RenderStyle>| -> u32 {
         let rs = row_style;
         match token {
-            "warn" => rs.and_then(|s| s.c_warn ).map(oc_ref).unwrap_or(wc_warn),
-            "crit" => rs.and_then(|s| s.c_crit ).map(oc_ref).unwrap_or(wc_crit),
-            "good" => rs.and_then(|s| s.c_good ).map(oc_ref).unwrap_or(wc_good),
-            "info" => rs.and_then(|s| s.c_info ).map(oc_ref).unwrap_or(wc_info),
-            "unit" => rs.and_then(|s| s.c_unit ).map(oc_ref).unwrap_or(wc_unit),
-            _      => rs.and_then(|s| s.c_label).map(oc_ref).unwrap_or(wc_value),
+            "value" => rs.and_then(|s| s.c_value).map(oc_ref).unwrap_or(wc_value),
+            "warn"  => rs.and_then(|s| s.c_warn ).map(oc_ref).unwrap_or(wc_warn),
+            "crit"  => rs.and_then(|s| s.c_crit ).map(oc_ref).unwrap_or(wc_crit),
+            "good"  => rs.and_then(|s| s.c_good ).map(oc_ref).unwrap_or(wc_good),
+            "info"  => rs.and_then(|s| s.c_info ).map(oc_ref).unwrap_or(wc_info),
+            "unit"  => rs.and_then(|s| s.c_unit ).map(oc_ref).unwrap_or(wc_unit),
+            _       => rs.and_then(|s| s.c_label).map(oc_ref).unwrap_or(wc_label),
         }
     };
     let resolve_label = |row_color: &str, row_style: Option<&core_client::RenderStyle>| -> u32 {
