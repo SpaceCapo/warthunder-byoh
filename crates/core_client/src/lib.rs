@@ -303,6 +303,10 @@ impl WindowDef {
 
 pub type RawFrame = HashMap<String, f64>;
 
+/// String-valued fields extracted alongside the numeric `RawFrame`.
+/// Currently populated with `vehicle_name` and `fm_name`.
+pub type StringFrame = HashMap<String, String>;
+
 // ── FM database ───────────────────────────────────────────────────────────────
 
 /// Parsed row from fm_data_db.csv for one vehicle.
@@ -358,13 +362,13 @@ pub fn load_fm_db(data_dir: Option<&Path>) -> FmDb {
         PathBuf::from("data").join("fm").join("fm")
     };
 
-    let _names_path = fm_dir.join("fm_names_db.csv");
+    let names_path = fm_dir.join("fm_names_db.csv");
     let data_path  = fm_dir.join("fm_data_db.csv");
 
     // --- fm_names_db.csv: Name;FmName;Type;English ---
-    // We use this only to build the set of known vehicle names; fm_data_db
-    // keys are already vehicle names we can look up by the `/indicators` `type` field.
-    // We just parse fm_data_db directly using the Name column.
+    // Build unit-name → FM-name aliases so that API vehicle names such as
+    // "av_8s_late_thailand" resolve to the correct FM record ("av_8s").
+    // We only need Name and FmName; the other columns are ignored here.
 
     let data_text = match std::fs::read_to_string(&data_path) {
         Ok(t) => t,
@@ -492,6 +496,32 @@ pub fn load_fm_db(data_dir: Option<&Path>) -> FmDb {
     }
 
     eprintln!("[fm_db] loaded {} records from {}", db.len(), data_path.display());
+
+    // --- Load fm_names_db.csv and insert unit-name aliases ---
+    // For each row where Name != FmName (e.g. "av_8s_late_thailand" → "av_8s"),
+    // copy the existing FmRecord under the unit name so lookups by API type work.
+    let mut alias_count = 0usize;
+    if let Ok(names_text) = std::fs::read_to_string(&names_path) {
+        let mut aliases: Vec<(String, String)> = Vec::new();
+        for (line_no, line) in names_text.lines().enumerate() {
+            if line_no == 0 { continue; } // skip header
+            let cols: Vec<&str> = line.split(';').collect();
+            if cols.len() < 2 { continue; }
+            let unit_name = cols[0].trim().to_string();
+            let fm_name   = cols[1].trim().to_string();
+            if !unit_name.is_empty() && unit_name != fm_name {
+                aliases.push((unit_name, fm_name));
+            }
+        }
+        for (unit_name, fm_name) in aliases {
+            if let Some(rec) = db.get(&fm_name).cloned() {
+                // or_insert: don't clobber a unit that already has its own record.
+                db.entry(unit_name).or_insert(rec);
+                alias_count += 1;
+            }
+        }
+    }
+    eprintln!("[fm_db] + {alias_count} unit-name aliases from fm_names_db.csv");
     db
 }
 
@@ -532,6 +562,54 @@ pub fn compute_named_flaps_current(flaps_pct: f64, rec: &FmRecord) -> Option<f64
 /// The `now` parameter is injectable for deterministic tests; production
 /// callers pass `Instant::now()`.
 fn inject_derived_fields(frame: &mut RawFrame, state: &mut DerivedState, now: Instant) {
+    // ── Unified fuel flow (kg/h) ──────────────────────────────────────────────
+    // This runs unconditionally — fuel flow doesn't need vy_ms / tas_kmh.
+    // Prefer the native `fuel_consume` reported by the API (prop aircraft);
+    // fall back to a differentiated EMA for jets that don't expose it.
+    // We only update when mfuel_kg actually changes (~6 Hz API rate guard)
+    // and only while the aircraft is burning fuel (Δfuel > 0).
+    if let Some(&fuel_kg) = frame.get("mfuel_kg") {
+        let changed = state.last_fuel_kg.map(|prev| prev != fuel_kg).unwrap_or(true);
+        if changed {
+            if let (Some(prev_kg), Some(prev_t)) = (state.last_fuel_kg, state.last_fuel_time) {
+                let dt_s = now.duration_since(prev_t).as_secs_f64();
+                let delta_kg = prev_kg - fuel_kg; // positive when consuming
+                if dt_s >= 0.05 && delta_kg > 0.0 {
+                    let rate_kgh = (delta_kg / dt_s) * 3600.0;
+                    if rate_kgh < 50_000.0 {
+                        const ALPHA: f64 = 0.25;
+                        let smoothed = match state.fuel_consume_ema {
+                            Some(prev_ema) => prev_ema + ALPHA * (rate_kgh - prev_ema),
+                            None => rate_kgh,
+                        };
+                        state.fuel_consume_ema = Some(smoothed);
+                    }
+                } else if delta_kg <= 0.0 {
+                    // Fuel went up (refuel / new mission) — reset the EMA.
+                    state.fuel_consume_ema = None;
+                }
+            }
+            state.last_fuel_kg = Some(fuel_kg);
+            state.last_fuel_time = Some(now);
+        }
+    }
+
+    // Emit `fuel_consume_calc` from the EMA when the native field is absent.
+    if !frame.contains_key("fuel_consume") {
+        if let Some(rate) = state.fuel_consume_ema {
+            frame.insert("fuel_consume_calc".into(), rate);
+        }
+    }
+
+    // Always emit `fuel_flow`: native API value takes priority, EMA as fallback.
+    let flow = frame.get("fuel_consume").copied()
+        .or_else(|| state.fuel_consume_ema);
+    if let Some(rate) = flow {
+        frame.insert("fuel_flow".into(), rate);
+    }
+
+    // ── SEP and TAS-derivative fields ─────────────────────────────────────────
+    // These require both vy_ms and tas_kmh; bail out if either is absent.
     let (Some(&vy_ms), Some(&tas_kmh)) = (frame.get("vy_ms"), frame.get("tas_kmh")) else { return; };
     let tas_ms = tas_kmh / 3.6;
 
@@ -610,53 +688,6 @@ fn inject_derived_fields(frame: &mut RawFrame, state: &mut DerivedState, now: In
                 frame.insert("crit_g_pos".into(), crit_g_pos);
             }
         }
-    }
-
-    // ── Unified fuel flow (kg/h) ──────────────────────────────────────────────
-    // `fuel_flow` is the single field to use in indicators.json regardless of
-    // aircraft type.  Prefer the native `fuel_consume` reported by the API;
-    // fall back to the differentiated EMA for planes that don't expose it.
-    // Calculated instantaneous rate: differentiate `mfuel_kg` over time.
-    // We only update when the fuel value actually changes (same ~6 Hz guard
-    // used for TAS above) and only when the aircraft is burning fuel (Δfuel > 0).
-    if let Some(&fuel_kg) = frame.get("mfuel_kg") {
-        let changed = state.last_fuel_kg.map(|prev| prev != fuel_kg).unwrap_or(true);
-        if changed {
-            if let (Some(prev_kg), Some(prev_t)) = (state.last_fuel_kg, state.last_fuel_time) {
-                let dt_s = now.duration_since(prev_t).as_secs_f64();
-                let delta_kg = prev_kg - fuel_kg; // positive when consuming
-                if dt_s >= 0.05 && delta_kg > 0.0 {
-                    let rate_kgh = (delta_kg / dt_s) * 3600.0;
-                    if rate_kgh < 50_000.0 {
-                        const ALPHA: f64 = 0.25;
-                        let smoothed = match state.fuel_consume_ema {
-                            Some(prev_ema) => prev_ema + ALPHA * (rate_kgh - prev_ema),
-                            None => rate_kgh,
-                        };
-                        state.fuel_consume_ema = Some(smoothed);
-                    }
-                } else if delta_kg <= 0.0 {
-                    // Fuel went up (refuel / new mission) — reset the EMA.
-                    state.fuel_consume_ema = None;
-                }
-            }
-            state.last_fuel_kg = Some(fuel_kg);
-            state.last_fuel_time = Some(now);
-        }
-    }
-
-    // Emit `fuel_consume_calc` from the EMA when the native field is absent.
-    if !frame.contains_key("fuel_consume") {
-        if let Some(rate) = state.fuel_consume_ema {
-            frame.insert("fuel_consume_calc".into(), rate);
-        }
-    }
-
-    // Always emit `fuel_flow`: native API value takes priority, EMA as fallback.
-    let flow = frame.get("fuel_consume").copied()
-        .or_else(|| state.fuel_consume_ema);
-    if let Some(rate) = flow {
-        frame.insert("fuel_flow".into(), rate);
     }
 }
 
@@ -1149,7 +1180,7 @@ pub struct Calculator {
 impl Calculator {
     pub fn new(indicators: Vec<IndicatorDef>) -> Self { Self { indicators } }
 
-    pub fn evaluate(&self, frame: &RawFrame) -> Vec<DisplayRow> {
+    pub fn evaluate(&self, frame: &RawFrame, sframe: &StringFrame) -> Vec<DisplayRow> {
         let mut rows = Vec::new();
         for ind in &self.indicators {
             if let Some(sw) = &ind.show_when {
@@ -1157,6 +1188,18 @@ impl Calculator {
                     Some(v) if v != 0.0 => {}
                     _ => continue,
                 }
+            }
+            // If the formula is a key in the string frame, emit it directly.
+            // No numeric evaluation, no threshold coloring — just display the string.
+            if let Some(s) = sframe.get(&ind.formula) {
+                rows.push(DisplayRow {
+                    label: ind.label.clone(),
+                    value_str: s.clone(),
+                    unit: ind.unit.clone(),
+                    color: ind.color.clone().unwrap_or_else(|| "info".into()),
+                    style: ind.style.clone(),
+                });
+                continue;
             }
             let value = match self.eval_formula(&ind.formula, frame) {
                 Some(v) => v,
@@ -1526,16 +1569,23 @@ impl Client {
         Err(last_err.unwrap_or_else(|| Error::Other("unknown".into())))
     }
 
-    /// Build a `RawFrame` from the current endpoint data (cache or sync fetch).
-    pub fn fetch_raw(&self) -> RawFrame {
+    /// Build a `RawFrame` and `StringFrame` from the current endpoint data
+    /// (cache read or synchronous fetch, depending on the client mode).
+    ///
+    /// `RawFrame`   — numeric fields extracted from all registered endpoints
+    ///                plus FM-derived and virtual fields.
+    /// `StringFrame` — string fields: currently `vehicle_name` and `fm_name`.
+    pub fn fetch_raw(&self) -> (RawFrame, StringFrame) {
         let mut frame = RawFrame::new();
+        let mut vehicle_name: Option<String> = None;
+        let mut fm_found = false;
 
         match &self.mode {
             FetchMode::Background { endpoint_cache } => {
                 // Instant read — no HTTP
                 let cache = match endpoint_cache.read() {
                     Ok(c) => c,
-                    Err(_) => return frame,
+                    Err(_) => return (frame, StringFrame::new()),
                 };
                 let mut by_endpoint: HashMap<&str, Vec<&FieldDef>> = HashMap::new();
                 for f in &self.fields {
@@ -1551,7 +1601,9 @@ impl Client {
                 // Inject FM fields from the current vehicle name (from /indicators "type")
                 if let Some(indicators_json) = cache.get("indicators").or_else(|| cache.get("/indicators")) {
                     if let Some(vehicle) = indicators_json.get("type").and_then(|v| v.as_str()) {
+                        vehicle_name = Some(vehicle.to_string());
                         if let Some(rec) = self.fm_db.get(vehicle) {
+                            fm_found = true;
                             inject_fm_fields(&mut frame, rec);
                             // Compute dynamic flaps speed limit based on current extension
                             if let Some(flaps_pct) = frame.get("flaps_pct").copied() {
@@ -1580,7 +1632,9 @@ impl Client {
                 // Inject FM fields from /indicators "type" in sync mode too
                 if let Ok(indicators_json) = self.fetch_json("indicators").or_else(|_| self.fetch_json("/indicators")) {
                     if let Some(vehicle) = indicators_json.get("type").and_then(|v| v.as_str()) {
+                        vehicle_name = Some(vehicle.to_string());
                         if let Some(rec) = self.fm_db.get(vehicle) {
+                            fm_found = true;
                             inject_fm_fields(&mut frame, rec);
                             if let Some(flaps_pct) = frame.get("flaps_pct").copied() {
                                 if let Some(spd) = compute_named_flaps_current(flaps_pct, rec) {
@@ -1596,7 +1650,22 @@ impl Client {
                 }
             }
         }
-        frame
+
+        // fm_loaded: 1.0 when an FM record was matched, 0.0 otherwise.
+        // Only injected when game data is available so the offline sentinel
+        // (`frame.is_empty()`) still works correctly.
+        if !frame.is_empty() {
+            frame.insert("fm_loaded".into(), if fm_found { 1.0 } else { 0.0 });
+        }
+
+        // Build StringFrame: vehicle_name (when known) and fm_name.
+        let mut sframe = StringFrame::new();
+        if let Some(ref name) = vehicle_name {
+            sframe.insert("vehicle_name".into(), name.clone());
+            sframe.insert("fm_name".into(), if fm_found { name.clone() } else { "(none)".into() });
+        }
+
+        (frame, sframe)
     }
 
     fn extract_fields(json: &JsonValue, fields: &[&FieldDef], frame: &mut RawFrame) {
@@ -1621,7 +1690,7 @@ impl Client {
     // ── Public API ───────────────────────────────────────────────────────────
 
     pub fn fetch_display_windows(&self) -> Vec<WindowRows> {
-        let frame = self.fetch_raw();
+        let (frame, sframe) = self.fetch_raw();
         let offline = frame.is_empty();
 
         let windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
@@ -1632,7 +1701,7 @@ impl Client {
                     unit: String::new(), color: "unit".into(), style: None,
                 }]
             } else {
-                let mut rows = calc.evaluate(&frame);
+                let mut rows = calc.evaluate(&frame, &sframe);
                 if rows.is_empty() {
                     rows.push(DisplayRow {
                         label: "WT".into(), value_str: "waiting".into(),
@@ -1713,7 +1782,7 @@ mod tests {
     #[test]
     fn test_fetch_raw_from_fixtures() {
         let client = make_client(state_fixture());
-        let frame = client.fetch_raw();
+        let (frame, _sframe) = client.fetch_raw();
         assert_eq!(frame.get("altitude_m"), Some(&4936.0));
         assert_eq!(frame.get("tas_kmh"), Some(&237.0));
         assert_eq!(frame.get("valid"), Some(&1.0));
@@ -1774,14 +1843,14 @@ mod tests {
         frame_gear_up.insert("gear_pct".into(), 0.0);
         frame_gear_up.insert("ias".into(), 150.0);
         frame_gear_up.insert("crit".into(), 300.0);
-        assert!(calc.evaluate(&frame_gear_up).is_empty(), "should be hidden when gear up");
+        assert!(calc.evaluate(&frame_gear_up, &StringFrame::new()).is_empty(), "should be hidden when gear up");
 
         let mut frame_gear_down = RawFrame::new();
         frame_gear_down.insert("valid".into(), 1.0);
         frame_gear_down.insert("gear_pct".into(), 100.0);
         frame_gear_down.insert("ias".into(), 150.0);
         frame_gear_down.insert("crit".into(), 300.0);
-        let rows = calc.evaluate(&frame_gear_down);
+        let rows = calc.evaluate(&frame_gear_down, &StringFrame::new());
         assert_eq!(rows.len(), 1, "should be visible when gear down");
         assert_eq!(rows[0].value_str, "50");
     }
@@ -1796,7 +1865,7 @@ mod tests {
         let mut frame = RawFrame::new();
         frame.insert("fuel_kg".into(), 150.0);
         frame.insert("fuel_kg0".into(), 500.0);
-        let rows = calc.evaluate(&frame);
+        let rows = calc.evaluate(&frame, &StringFrame::new());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].value_str, "30.0");
         assert_eq!(rows[0].color, "value");
