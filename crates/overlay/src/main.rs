@@ -67,7 +67,7 @@ use {
 
 /// Shared display data for the GPU path.
 #[cfg(feature = "gpu")]
-type Shared = Arc<ArcSwap<Vec<Vec<DisplayRow>>>>;
+type Shared = Arc<ArcSwap<Vec<core_client::WindowRows>>>;
 
 /// Generation counter incremented by the poller thread every time new data is stored.
 #[cfg(feature = "gpu")]
@@ -123,6 +123,9 @@ struct GpuApp {
     /// Error message from the last failed reload, written by the poller thread
     /// and consumed by the settings window to show a popup.
     reload_error: Arc<std::sync::Mutex<Option<String>>>,
+    /// Fresh WindowDefs written by the poller on a successful reload.
+    /// Consumed by about_to_wait to update self.window_defs.
+    pending_window_defs: Arc<std::sync::Mutex<Option<Vec<WindowDef>>>>,
     /// Cached visibility state — avoids redundant set_visible calls.
     overlays_visible: bool,
     /// Resolved path to indicators.json — used to persist moved positions.
@@ -145,6 +148,7 @@ impl GpuApp {
         app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
         reload_requested: Arc<std::sync::atomic::AtomicBool>,
         reload_error: Arc<std::sync::Mutex<Option<String>>>,
+        pending_window_defs: Arc<std::sync::Mutex<Option<Vec<WindowDef>>>>,
         indicators_path: Option<PathBuf>,
     ) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
@@ -167,6 +171,7 @@ impl GpuApp {
             app_config,
             reload_requested,
             reload_error,
+            pending_window_defs,
             overlays_visible: true,
             indicators_path,
             position_dirty: false,
@@ -203,6 +208,7 @@ impl ApplicationHandler for GpuApp {
                 x: 100, y: 100,
                 width: None, height: None,
                 indicators: Vec::new(),
+                style: None,
             }]
         } else {
             self.window_defs.clone()
@@ -420,17 +426,22 @@ impl ApplicationHandler for GpuApp {
                 let ctx = match self.ctx.as_mut() { Some(c) => c, None => return };
                 let ws  = match self.windows.get_mut(&id) { Some(w) => w, None => return };
                 let guard = self.shared.load();
-                let rows: &[DisplayRow] = if self.overlays_visible {
-                    guard.get(ws.idx).map(|v| v.as_slice()).unwrap_or(&[])
-                } else {
-                    &[] // empty rows → renderer paints fully transparent
-                };
+                let (rows, win_style): (&[DisplayRow], Option<&core_client::RenderStyle>) =
+                    if self.overlays_visible {
+                        if let Some(w) = guard.get(ws.idx) {
+                            (w.rows.as_slice(), w.style.as_ref())
+                        } else {
+                            (&[], None)
+                        }
+                    } else {
+                        (&[], None) // empty rows → renderer paints fully transparent
+                    };
                 let blink = render_gpu::blink_on();
 
                 match &mut ws.target {
                     #[cfg(target_os = "windows")]
                     GpuTarget::Offscreen(state) => {
-                        let pixels = render_gpu::render_offscreen(ctx, state, rows, blink);
+                        let pixels = render_gpu::render_offscreen(ctx, state, rows, blink, win_style);
                         if let Some(hwnd) = platform::get_hwnd(&ws.window) {
                             platform::update_layered_window_from_pixels(
                                 hwnd, &pixels, state.width, state.height,
@@ -440,7 +451,7 @@ impl ApplicationHandler for GpuApp {
 
                     #[cfg(not(target_os = "windows"))]
                     GpuTarget::Surface(state) => {
-                        match render_gpu::render_surface(ctx, state, rows, blink) {
+                        match render_gpu::render_surface(ctx, state, rows, blink, win_style) {
                             Ok((needed_w, needed_h)) => {
                                 // Resize the window whenever content dimensions change.
                                 if needed_w != state.width || needed_h != state.height {
@@ -521,6 +532,27 @@ impl ApplicationHandler for GpuApp {
             }
         }
 
+        // Apply fresh WindowDefs pushed by the poller after a successful reload.
+        // We preserve any drag-modified x/y positions that are currently in
+        // memory but not yet written to disk.
+        if let Ok(mut slot) = self.pending_window_defs.lock() {
+            if let Some(new_defs) = slot.take() {
+                // Snapshot current in-memory positions keyed by window id.
+                let positions: std::collections::HashMap<String, (i32, i32)> = self
+                    .window_defs.iter()
+                    .map(|w| (w.id.clone(), (w.x, w.y)))
+                    .collect();
+                // Replace defs with fresh data from disk, restoring positions.
+                self.window_defs = new_defs.into_iter().map(|mut wd| {
+                    if let Some(&(x, y)) = positions.get(&wd.id) {
+                        wd.x = x;
+                        wd.y = y;
+                    }
+                    wd
+                }).collect();
+            }
+        }
+
         // Sleep until next potential update — avoids busy-spinning the event loop.
         let next_wake = now + Duration::from_millis(FRAME_MS);
         event_loop.set_control_flow(ControlFlow::WaitUntil(next_wake));
@@ -538,8 +570,16 @@ fn run_gpu_mode() {
     if window_defs.is_empty() {
         eprintln!("[gpu] no windows defined in indicators.json — using fallback");
     }
-    let n_windows = window_defs.len().max(1);
-    let shared: Shared    = Arc::new(ArcSwap::from_pointee(vec![Vec::new(); n_windows]));
+    let initial_windows: Vec<core_client::WindowRows> = window_defs.iter().map(|wd| {
+        core_client::WindowRows {
+            id: wd.id.clone(),
+            x: wd.x, y: wd.y,
+            width: wd.computed_width(), height: wd.computed_height(),
+            rows: Vec::new(),
+            style: wd.style.clone(),
+        }
+    }).collect();
+    let shared: Shared    = Arc::new(ArcSwap::from_pointee(initial_windows));
     let shared_gen: SharedGen = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let wt_foreground: Arc<std::sync::atomic::AtomicBool> =
         Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -550,6 +590,8 @@ fn run_gpu_mode() {
     let reload_requested: Arc<std::sync::atomic::AtomicBool> =
         Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reload_error: Arc<std::sync::Mutex<Option<String>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let pending_window_defs: Arc<std::sync::Mutex<Option<Vec<WindowDef>>>> =
         Arc::new(std::sync::Mutex::new(None));
 
     // Build the client on the main thread so we can read fm_version_tag before
@@ -568,6 +610,7 @@ fn run_gpu_mode() {
         let cfg             = app_config.clone();
         let reload_flag     = reload_requested.clone();
         let err_slot        = reload_error.clone();
+        let pending_defs    = pending_window_defs.clone();
         std::thread::spawn(move || {
             // Reusable HTTP client for mission polling.
             let base_url = "http://localhost:8111";
@@ -580,9 +623,15 @@ fn run_gpu_mode() {
                 // Handle reload requests from the settings window.
                 if reload_flag.swap(false, std::sync::atomic::Ordering::Relaxed) {
                     match client.reload_window_defs() {
-                        Ok(()) => {
+                        Ok(new_defs) => {
                             if let Ok(mut lock) = cfg.write() {
                                 *lock = core_client::AppConfig::load();
+                            }
+                            // Push new defs to GpuApp so it can update window_defs
+                            // (used by save_positions_if_dirty) without losing
+                            // in-memory drag positions.
+                            if let Ok(mut slot) = pending_defs.lock() {
+                                *slot = Some(new_defs);
                             }
                         }
                         Err(msg) => {
@@ -605,8 +654,7 @@ fn run_gpu_mode() {
                 }
 
                 let windows = client.fetch_display_windows();
-                let data: Vec<Vec<DisplayRow>> = windows.into_iter().map(|w| w.rows).collect();
-                shared.store(Arc::new(data));
+                shared.store(Arc::new(windows));
                 shared_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let elapsed = t0.elapsed();
                 let budget = Duration::from_millis(16);
@@ -629,6 +677,7 @@ fn run_gpu_mode() {
             app_config,
             reload_requested,
             reload_error,
+            pending_window_defs,
             indicators_path,
         ))
         .expect("run app");
@@ -678,9 +727,9 @@ use {
     },
 };
 
-/// Shared state: one `Vec<DisplayRow>` per window, updated atomically by the poller.
+/// Shared state: one `WindowRows` per window, updated atomically by the poller.
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
-type Shared = Arc<ArcSwap<Vec<Vec<DisplayRow>>>>;
+type Shared = Arc<ArcSwap<Vec<core_client::WindowRows>>>;
 
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 fn main() {
@@ -690,9 +739,17 @@ fn main() {
     if window_defs.is_empty() {
         eprintln!("[overlay] no windows defined in indicators.json — using a single empty fallback");
     }
-    let n_windows = window_defs.len().max(1);
 
-    let shared: Shared = Arc::new(ArcSwap::from_pointee(vec![Vec::new(); n_windows]));
+    let initial_windows: Vec<core_client::WindowRows> = window_defs.iter().map(|wd| {
+        core_client::WindowRows {
+            id: wd.id.clone(),
+            x: wd.x, y: wd.y,
+            width: wd.computed_width(), height: wd.computed_height(),
+            rows: Vec::new(),
+            style: wd.style.clone(),
+        }
+    }).collect();
+    let shared: Shared = Arc::new(ArcSwap::from_pointee(initial_windows));
     let wt_foreground: Arc<std::sync::atomic::AtomicBool> =
         Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mission_running: Arc<std::sync::atomic::AtomicBool> =
@@ -728,8 +785,7 @@ fn main() {
                 }
 
                 let windows = client.fetch_display_windows();
-                let data: Vec<Vec<DisplayRow>> = windows.into_iter().map(|w| w.rows).collect();
-                shared.store(Arc::new(data));
+                shared.store(Arc::new(windows));
 
                 let elapsed = t0.elapsed();
                 let budget = Duration::from_millis(16);
@@ -813,6 +869,7 @@ impl ApplicationHandler for OverlayApp {
                 x: 100, y: 100,
                 width: None, height: None,
                 indicators: Vec::new(),
+                style: None,
             }]
         } else {
             self.window_defs.clone()
@@ -837,7 +894,7 @@ impl ApplicationHandler for OverlayApp {
             win32::make_layered(&window);
             let size = window.inner_size();
             if let Some(hwnd) = win32::get_hwnd(&window) {
-                paint_layered(hwnd, &[], size.width.max(1), size.height.max(1));
+                paint_layered(hwnd, &[], size.width.max(1), size.height.max(1), None);
             }
 
             let id = window.id();
@@ -885,14 +942,19 @@ impl ApplicationHandler for OverlayApp {
             WindowEvent::RedrawRequested => {
                 if let Some(ws) = self.windows.get(&id) {
                     let guard = self.shared.load();
-                    let rows: &[DisplayRow] = if self.overlays_visible {
-                        guard.get(ws.idx).map(|v| v.as_slice()).unwrap_or(&[])
-                    } else {
-                        &[] // empty rows → paint_layered writes fully transparent pixels
-                    };
+                    let (rows, win_style): (&[DisplayRow], Option<&core_client::RenderStyle>) =
+                        if self.overlays_visible {
+                            if let Some(w) = guard.get(ws.idx) {
+                                (w.rows.as_slice(), w.style.as_ref())
+                            } else {
+                                (&[], None)
+                            }
+                        } else {
+                            (&[], None) // empty rows → paint_layered writes fully transparent pixels
+                        };
                     let size = ws.window.inner_size();
                     if let Some(hwnd) = win32::get_hwnd(&ws.window) {
-                        paint_layered(hwnd, rows, size.width.max(1), size.height.max(1));
+                        paint_layered(hwnd, rows, size.width.max(1), size.height.max(1), win_style);
                     }
                 }
             }
@@ -948,8 +1010,6 @@ const COL_GAP: i32 = 12;
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 const C_LABEL:  u32 = 0x00_FF_FF_FF;
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
-const C_VALUE:  u32 = 0x00_FF_FF_FF;
-#[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 const C_UNIT:   u32 = 0x00_C0_C0_C0;
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 const C_WARN:   u32 = 0x00_3C_3C_DC; // BGR red
@@ -961,19 +1021,6 @@ const C_GOOD:   u32 = 0x00_78_C8_50; // BGR green
 const C_INFO:   u32 = 0x00_DC_A0_50; // BGR blue/orange
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 const C_SHADOW: u32 = 0x00_22_22_22;
-
-/// Map a color token from `DisplayRow::color` to a GDI COLORREF.
-#[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
-fn token_to_colorref(token: &str) -> u32 {
-    match token {
-        "warn"  => C_WARN,
-        "crit"  => C_CRIT,
-        "good"  => C_GOOD,
-        "info"  => C_INFO,
-        "unit"  => C_UNIT,
-        _       => C_VALUE,  // "value" and anything unknown
-    }
-}
 
 /// Returns `true` during the "on" half of a 2 Hz blink cycle (250 ms on / 250 ms off).
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
@@ -990,6 +1037,7 @@ fn paint_layered(
     rows: &[DisplayRow],
     width: u32,
     height: u32,
+    win_style: Option<&core_client::RenderStyle>,
 ) {
     use std::mem::size_of;
     use windows::Win32::Foundation::{COLORREF, HANDLE, POINT, SIZE};
@@ -1001,6 +1049,65 @@ fn paint_layered(
     use windows::Win32::UI::WindowsAndMessaging::{
         UpdateLayeredWindow, ULW_ALPHA,
         SetWindowPos, HWND_TOPMOST, SWP_NOMOVE,
+    };
+
+    // Convert OverlayColor (RGB) to GDI COLORREF (0x00BBGGRR).
+    let oc_ref = |c: core_client::OverlayColor| -> u32 {
+        let [r, g, b, _a] = c.to_rgba();
+        (b as u32) << 16 | (g as u32) << 8 | r as u32
+    };
+
+    // Resolve layout from win_style, fall back to compile-time defaults.
+    let font_h: i32 = win_style.and_then(|s| s.font_size)
+        .map(|fs| -(fs * 96.0 / 72.0).round() as i32)
+        .unwrap_or(FONT_H);
+    let row_h: i32 = win_style.and_then(|s| s.line_height)
+        .map(|lh| lh.round() as i32)
+        .unwrap_or(ROW_H);
+    let pad_x: i32 = win_style.and_then(|s| s.pad_x)
+        .map(|v| v.round() as i32)
+        .unwrap_or(PAD_X);
+    let pad_y: i32 = win_style.and_then(|s| s.pad_y)
+        .map(|v| v.round() as i32)
+        .unwrap_or(PAD_Y);
+    let col_gap: i32 = win_style.and_then(|s| s.col_gap)
+        .map(|v| v.round() as i32)
+        .unwrap_or(COL_GAP);
+
+    // Resolve window-level colors from win_style, fall back to compile-time defaults.
+    let wc_label:  u32 = win_style.and_then(|s| s.c_label ).map(oc_ref).unwrap_or(C_LABEL);
+    let wc_unit:   u32 = win_style.and_then(|s| s.c_unit  ).map(oc_ref).unwrap_or(C_UNIT);
+    let wc_warn:   u32 = win_style.and_then(|s| s.c_warn  ).map(oc_ref).unwrap_or(C_WARN);
+    let wc_crit:   u32 = win_style.and_then(|s| s.c_crit  ).map(oc_ref).unwrap_or(C_CRIT);
+    let wc_good:   u32 = win_style.and_then(|s| s.c_good  ).map(oc_ref).unwrap_or(C_GOOD);
+    let wc_info:   u32 = win_style.and_then(|s| s.c_info  ).map(oc_ref).unwrap_or(C_INFO);
+    let wc_shadow: u32 = win_style.and_then(|s| s.c_shadow).map(oc_ref).unwrap_or(C_SHADOW);
+    let wc_value:  u32 = wc_label; // "value" token uses label color
+
+    // Map a token string + per-row style to a COLORREF.
+    let resolve_token = |token: &str, row_style: Option<&core_client::RenderStyle>| -> u32 {
+        let rs = row_style;
+        match token {
+            "warn" => rs.and_then(|s| s.c_warn ).map(oc_ref).unwrap_or(wc_warn),
+            "crit" => rs.and_then(|s| s.c_crit ).map(oc_ref).unwrap_or(wc_crit),
+            "good" => rs.and_then(|s| s.c_good ).map(oc_ref).unwrap_or(wc_good),
+            "info" => rs.and_then(|s| s.c_info ).map(oc_ref).unwrap_or(wc_info),
+            "unit" => rs.and_then(|s| s.c_unit ).map(oc_ref).unwrap_or(wc_unit),
+            _      => rs.and_then(|s| s.c_label).map(oc_ref).unwrap_or(wc_value),
+        }
+    };
+    let resolve_label = |row_color: &str, row_style: Option<&core_client::RenderStyle>| -> u32 {
+        if row_color == "value" || row_color.is_empty() {
+            row_style.and_then(|s| s.c_label).map(oc_ref).unwrap_or(wc_label)
+        } else {
+            resolve_token(row_color, row_style)
+        }
+    };
+    let resolve_shadow = |row_style: Option<&core_client::RenderStyle>| -> u32 {
+        row_style.and_then(|s| s.c_shadow).map(oc_ref).unwrap_or(wc_shadow)
+    };
+    let resolve_unit = |row_style: Option<&core_client::RenderStyle>| -> u32 {
+        row_style.and_then(|s| s.c_unit).map(oc_ref).unwrap_or(wc_unit)
     };
 
     unsafe {
@@ -1022,7 +1129,7 @@ fn paint_layered(
             DEFAULT_PITCH, FF_DONTCARE, OUT_DEFAULT_PRECIS};
         let face: Vec<u16> = "Courier New\0".encode_utf16().collect();
         let hfont = CreateFontW(
-            FONT_H, 0, 0, 0,
+            font_h, 0, 0, 0,
             700, 0, 0, 0, // weight=bold — must match drawing font for accurate measurements
             DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32,
             CLIP_DEFAULT_PRECIS.0 as u32, 3, // NONANTIALIASED_QUALITY
@@ -1034,19 +1141,19 @@ fn paint_layered(
         // ── measure column widths ────────────────────────────────────────
         let label_col_w = rows.iter()
             .map(|r| if r.label.is_empty() { 0 } else { text_width_dc!(r.label.as_str()) })
-            .max().unwrap_or(0) + COL_GAP;
+            .max().unwrap_or(0) + col_gap;
         let value_col_w = rows.iter()
             .map(|r| if r.value_str.is_empty() { 0 } else { text_width_dc!(r.value_str.as_str()) })
-            .max().unwrap_or(0) + COL_GAP;
+            .max().unwrap_or(0) + col_gap;
         let unit_col_w = rows.iter()
             .map(|r| if r.unit.is_empty() { 0 } else { text_width_dc!(r.unit.as_str()) })
             .max().unwrap_or(0);
         let has_units = rows.iter().any(|r| !r.unit.is_empty());
 
-        let needed_w = (PAD_X + label_col_w + value_col_w
-            + if has_units { COL_GAP + unit_col_w } else { 0 }
-            + PAD_X).max(1) as u32;
-        let needed_h = (PAD_Y + rows.len().max(1) as i32 * ROW_H + PAD_Y).max(1) as u32;
+        let needed_w = (pad_x + label_col_w + value_col_w
+            + if has_units { col_gap + unit_col_w } else { 0 }
+            + pad_x).max(1) as u32;
+        let needed_h = (pad_y + rows.len().max(1) as i32 * row_h + pad_y).max(1) as u32;
 
         // ── resize window if content doesn't fit ────────────────────────
         let (width, height) = if needed_w != width || needed_h != height {
@@ -1108,33 +1215,35 @@ fn paint_layered(
         // ── draw rows ────────────────────────────────────────────────────
         let blink = blink_on();
         for (i, row) in rows.iter().enumerate() {
-            let y = PAD_Y + i as i32 * ROW_H;
-            let vx = PAD_X + label_col_w + value_col_w
+            let y = pad_y + i as i32 * row_h;
+            let vx = pad_x + label_col_w + value_col_w
                 - if row.value_str.is_empty() { 0 } else { text_width!(row.value_str.as_str()) };
-            let ux = PAD_X + label_col_w + value_col_w + COL_GAP;
+            let ux = pad_x + label_col_w + value_col_w + col_gap;
 
-            let value_color = token_to_colorref(&row.color);
+            let rs = row.style.as_ref();
+            let value_color = resolve_token(&row.color, rs);
             // For "crit", suppress value+unit during the off half of the blink cycle.
             let show_value = row.color != "crit" || blink;
+            let shadow_color = resolve_shadow(rs);
 
             // shadow pass
-            SetTextColor(mem_dc, COLORREF(C_SHADOW));
-            if !row.label.is_empty()                          { text_out!(PAD_X + 1, y + 1, row.label.as_str()); }
+            SetTextColor(mem_dc, COLORREF(shadow_color));
+            if !row.label.is_empty()                          { text_out!(pad_x + 1, y + 1, row.label.as_str()); }
             if show_value && !row.value_str.is_empty()        { text_out!(vx + 1,   y + 1, row.value_str.as_str()); }
             if show_value && !row.unit.is_empty()             { text_out!(ux + 1,   y + 1, row.unit.as_str());  }
 
             // main text
             if !row.label.is_empty() {
-                let label_color = if value_color == C_VALUE { C_LABEL } else { value_color };
+                let label_color = resolve_label(&row.color, rs);
                 SetTextColor(mem_dc, COLORREF(label_color));
-                text_out!(PAD_X, y, row.label.as_str());
+                text_out!(pad_x, y, row.label.as_str());
             }
             if show_value && !row.value_str.is_empty() {
                 SetTextColor(mem_dc, COLORREF(value_color));
                 text_out!(vx, y, row.value_str.as_str());
             }
             if show_value && !row.unit.is_empty() {
-                SetTextColor(mem_dc, COLORREF(C_UNIT));
+                SetTextColor(mem_dc, COLORREF(resolve_unit(rs)));
                 text_out!(ux, y, row.unit.as_str());
             }
         }

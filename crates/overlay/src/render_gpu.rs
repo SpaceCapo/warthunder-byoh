@@ -26,32 +26,86 @@ use glyphon::{
 };
 use std::time::Instant;
 
-// ─── Layout constants ─────────────────────────────────────────────────────────
+// ─── ResolvedStyle ────────────────────────────────────────────────────────────
 
-const FONT_SIZE: f32 = 32.0;
-const LINE_HEIGHT: f32 = 40.0;
-const PAD_X: f32 = 8.0;
-const PAD_Y: f32 = 10.0;
-const COL_GAP: f32 = 12.0;
+/// Fully-resolved render style (no Options) for one overlay window.
+///
+/// Constructed from `defaults()`, then optionally refined by a window-level
+/// `RenderStyle` via `apply()`, and further refined per-row by `apply_colors()`.
+#[derive(Clone)]
+pub struct ResolvedStyle {
+    pub font_size:   f32,
+    pub line_height: f32,
+    pub pad_x:       f32,
+    pub pad_y:       f32,
+    pub col_gap:     f32,
+    pub c_label:  Color,
+    pub c_unit:   Color,
+    pub c_warn:   Color,
+    pub c_crit:   Color,
+    pub c_good:   Color,
+    pub c_info:   Color,
+    pub c_shadow: Color,
+}
 
-// ─── Color palette ────────────────────────────────────────────────────────────
-
-fn c_label()  -> Color { Color::rgb(255, 255, 255) }
-fn c_unit()   -> Color { Color::rgb(192, 192, 192) }
-fn c_warn()   -> Color { Color::rgb(220,  60,  60) }
-fn c_crit()   -> Color { Color::rgb(220,  60,  60) }
-fn c_good()   -> Color { Color::rgb( 80, 200, 120) }
-fn c_info()   -> Color { Color::rgb( 80, 160, 220) }
-fn c_shadow() -> Color { Color::rgba(0, 0, 0, 160) }
-
-fn token_to_color(token: &str) -> Color {
-    match token {
-        "warn" => c_warn(),
-        "crit" => c_crit(),
-        "good" => c_good(),
-        "info" => c_info(),
-        _      => c_label(),
+impl ResolvedStyle {
+    pub fn defaults() -> Self {
+        Self {
+            font_size:   32.0,
+            line_height: 40.0,
+            pad_x:        8.0,
+            pad_y:       10.0,
+            col_gap:     12.0,
+            c_label:  Color::rgb(255, 255, 255),
+            c_unit:   Color::rgb(192, 192, 192),
+            c_warn:   Color::rgb(220,  60,  60),
+            c_crit:   Color::rgb(220,  60,  60),
+            c_good:   Color::rgb( 80, 200, 120),
+            c_info:   Color::rgb( 80, 160, 220),
+            c_shadow: Color::rgba(0, 0, 0, 160),
+        }
     }
+
+    /// Apply all overrides from `style` (layout + colours).
+    pub fn apply(&self, style: &core_client::RenderStyle) -> Self {
+        let mut r = self.clone();
+        if let Some(v) = style.font_size   { r.font_size   = v; }
+        if let Some(v) = style.line_height { r.line_height = v; }
+        if let Some(v) = style.pad_x       { r.pad_x       = v; }
+        if let Some(v) = style.pad_y       { r.pad_y       = v; }
+        if let Some(v) = style.col_gap     { r.col_gap      = v; }
+        r.apply_colors(style)
+    }
+
+    /// Apply only colour overrides from `style` (used at per-indicator level).
+    pub fn apply_colors(&self, style: &core_client::RenderStyle) -> Self {
+        let mut r = self.clone();
+        if let Some(c) = style.c_label  { r.c_label  = oc(c); }
+        if let Some(c) = style.c_unit   { r.c_unit   = oc(c); }
+        if let Some(c) = style.c_warn   { r.c_warn   = oc(c); }
+        if let Some(c) = style.c_crit   { r.c_crit   = oc(c); }
+        if let Some(c) = style.c_good   { r.c_good   = oc(c); }
+        if let Some(c) = style.c_info   { r.c_info   = oc(c); }
+        if let Some(c) = style.c_shadow { r.c_shadow = oc(c); }
+        r
+    }
+
+    /// Map a color token to the appropriate resolved color.
+    pub fn token_to_color(&self, token: &str) -> Color {
+        match token {
+            "warn" => self.c_warn,
+            "crit" => self.c_crit,
+            "good" => self.c_good,
+            "info" => self.c_info,
+            _      => self.c_label,
+        }
+    }
+}
+
+/// Convert an `OverlayColor` to a glyphon `Color`.
+fn oc(c: core_client::OverlayColor) -> Color {
+    let [r, g, b, a] = c.to_rgba();
+    Color::rgba(r, g, b, a)
 }
 
 /// Returns `true` during the "on" half of a 2 Hz blink cycle.
@@ -74,12 +128,14 @@ struct TextEntry {
 
 /// Cached output of `make_text_entries`.
 ///
-/// Keyed on the logical content of the rows + blink state.  As long as the key
-/// matches the previous frame we skip all font shaping and reuse the existing
-/// `Buffer` objects directly.
+/// Keyed on the logical content of the rows + blink state + styles.  As long as
+/// the key matches the previous frame we skip all font shaping and reuse the
+/// existing `Buffer` objects directly.
 pub struct TextCache {
-    /// Snapshot key: `(label, value_str, unit, color)` per row.
-    row_key:   Vec<(String, String, String, String)>,
+    /// Window-level style key.
+    win_style_key: Option<core_client::RenderStyle>,
+    /// Snapshot key: `(label, value_str, unit, color, row_style)` per row.
+    row_key:   Vec<(String, String, String, String, Option<core_client::RenderStyle>)>,
     blink_key: bool,
     entries:   Vec<TextEntry>,
     pub cached_w: u32,
@@ -89,6 +145,7 @@ pub struct TextCache {
 impl TextCache {
     pub fn new() -> Self {
         Self {
+            win_style_key: None,
             row_key: Vec::new(),
             blink_key: false,
             entries: Vec::new(),
@@ -97,23 +154,46 @@ impl TextCache {
         }
     }
 
-    /// Return `true` if the cache is still valid for `rows` + `blink`.
-    fn is_valid(&self, rows: &[DisplayRow], blink: bool) -> bool {
+    /// Return `true` if the cache is still valid for `rows` + `blink` + `win_style`.
+    fn is_valid(
+        &self,
+        rows: &[DisplayRow],
+        blink: bool,
+        win_style: Option<&core_client::RenderStyle>,
+    ) -> bool {
         blink == self.blink_key
+            && win_style == self.win_style_key.as_ref()
             && rows.len() == self.row_key.len()
             && rows.iter().zip(&self.row_key).all(|(r, k)| {
-                r.label == k.0 && r.value_str == k.1 && r.unit == k.2 && r.color == k.3
+                r.label == k.0
+                    && r.value_str == k.1
+                    && r.unit == k.2
+                    && r.color == k.3
+                    && r.style.as_ref() == k.4.as_ref()
             })
     }
 
     /// Rebuild the cache from `rows`.  Called only when `is_valid` returns false.
-    pub fn rebuild(&mut self, font_system: &mut FontSystem, rows: &[DisplayRow], blink: bool) {
+    pub fn rebuild(
+        &mut self,
+        font_system: &mut FontSystem,
+        rows: &[DisplayRow],
+        blink: bool,
+        win_style: Option<&core_client::RenderStyle>,
+    ) {
+        self.win_style_key = win_style.cloned();
         self.row_key = rows.iter()
-            .map(|r| (r.label.clone(), r.value_str.clone(), r.unit.clone(), r.color.clone()))
+            .map(|r| (
+                r.label.clone(),
+                r.value_str.clone(),
+                r.unit.clone(),
+                r.color.clone(),
+                r.style.clone(),
+            ))
             .collect();
         self.blink_key = blink;
 
-        let (entries, w, h) = make_text_entries(font_system, rows, blink);
+        let (entries, w, h) = make_text_entries(font_system, rows, blink, win_style);
         self.entries  = entries;
         self.cached_w = w;
         self.cached_h = h;
@@ -125,9 +205,10 @@ impl TextCache {
         font_system: &mut FontSystem,
         rows: &[DisplayRow],
         blink: bool,
+        win_style: Option<&core_client::RenderStyle>,
     ) -> (&'a [TextEntry], u32, u32) {
-        if !self.is_valid(rows, blink) {
-            self.rebuild(font_system, rows, blink);
+        if !self.is_valid(rows, blink, win_style) {
+            self.rebuild(font_system, rows, blink, win_style);
         }
         (&self.entries, self.cached_w, self.cached_h)
     }
@@ -139,13 +220,20 @@ fn make_text_entries(
     font_system: &mut FontSystem,
     rows: &[DisplayRow],
     blink: bool,
+    win_style: Option<&core_client::RenderStyle>,
 ) -> (Vec<TextEntry>, u32, u32) {
-    let metrics = Metrics::new(FONT_SIZE, LINE_HEIGHT);
+    // Resolve window-level style; per-row styles only override colours.
+    let win_rs = match win_style {
+        Some(s) => ResolvedStyle::defaults().apply(s),
+        None    => ResolvedStyle::defaults(),
+    };
+
+    let metrics = Metrics::new(win_rs.font_size, win_rs.line_height);
 
     // Helper: measure rendered width of a string.
     let measure = |font_system: &mut FontSystem, text: &str| -> f32 {
         let mut buf = Buffer::new(font_system, metrics);
-        buf.set_size(font_system, None, Some(LINE_HEIGHT));
+        buf.set_size(font_system, None, Some(win_rs.line_height));
         buf.set_text(
             font_system, text,
             Attrs::new().family(Family::Monospace),
@@ -177,7 +265,7 @@ fn make_text_entries(
     macro_rules! push {
         ($text:expr, $x:expr, $y:expr, $color:expr) => {{
             let mut buf = Buffer::new(font_system, metrics);
-            buf.set_size(font_system, None, Some(LINE_HEIGHT));
+            buf.set_size(font_system, None, Some(win_rs.line_height));
             buf.set_text(
                 font_system,
                 $text,
@@ -190,38 +278,45 @@ fn make_text_entries(
     }
 
     for (i, row) in rows.iter().enumerate() {
-        let y = PAD_Y + i as f32 * LINE_HEIGHT;
-        let vc = token_to_color(&row.color);
+        // Resolve per-row style: inherit window style, then apply per-indicator colour overrides.
+        let row_rs = match &row.style {
+            Some(s) => win_rs.apply_colors(s),
+            None    => win_rs.clone(),
+        };
+
+        let y = win_rs.pad_y + i as f32 * win_rs.line_height;
+        let vc = row_rs.token_to_color(&row.color);
         let show = row.color != "crit" || blink;
 
         if !row.label.is_empty() {
-            let lc = if row.color == "value" || row.color.is_empty() { c_label() } else { vc };
-            push!(&row.label, PAD_X + 2.0, y + 2.0, c_shadow());
-            push!(&row.label, PAD_X, y, lc);
+            let lc = if row.color == "value" || row.color.is_empty() { row_rs.c_label } else { vc };
+            push!(&row.label, win_rs.pad_x + 2.0, y + 2.0, row_rs.c_shadow);
+            push!(&row.label, win_rs.pad_x, y, lc);
         }
         if show && !row.value_str.is_empty() {
             // Right-align value within value column.
             let this_w = measure(font_system, &row.value_str);
-            let vx = PAD_X + label_col_w + COL_GAP + (value_col_w - this_w).max(0.0);
-            push!(&row.value_str, vx + 2.0, y + 2.0, c_shadow());
+            let vx = win_rs.pad_x + label_col_w + win_rs.col_gap + (value_col_w - this_w).max(0.0);
+            push!(&row.value_str, vx + 2.0, y + 2.0, row_rs.c_shadow);
             push!(&row.value_str, vx, y, vc);
         }
         if show && !row.unit.is_empty() {
-            let ux = PAD_X + label_col_w + COL_GAP + value_col_w + COL_GAP;
-            push!(&row.unit, ux + 2.0, y + 2.0, c_shadow());
-            push!(&row.unit, ux, y, c_unit());
+            let ux = win_rs.pad_x + label_col_w + win_rs.col_gap + value_col_w + win_rs.col_gap;
+            push!(&row.unit, ux + 2.0, y + 2.0, row_rs.c_shadow);
+            push!(&row.unit, ux, y, row_rs.c_unit);
         }
     }
 
     // Compute required window dimensions from actual content.
-    let needed_w = (PAD_X
+    let needed_w = (win_rs.pad_x
         + label_col_w
-        + COL_GAP
+        + win_rs.col_gap
         + value_col_w
-        + if has_units { COL_GAP + unit_col_w } else { 0.0 }
-        + PAD_X)
+        + if has_units { win_rs.col_gap + unit_col_w } else { 0.0 }
+        + win_rs.pad_x)
         .ceil() as u32;
-    let needed_h = (PAD_Y + rows.len().max(1) as f32 * LINE_HEIGHT + PAD_Y).ceil() as u32;
+    let needed_h = (win_rs.pad_y + rows.len().max(1) as f32 * win_rs.line_height + win_rs.pad_y)
+        .ceil() as u32;
 
     (entries, needed_w.max(1), needed_h.max(1))
 }
@@ -341,9 +436,10 @@ pub fn render_offscreen(
     state: &mut GpuOffscreenState,
     rows: &[DisplayRow],
     blink: bool,
+    win_style: Option<&core_client::RenderStyle>,
 ) -> Vec<u8> {
     let (entries, win_w, win_h) =
-        make_text_entries(&mut ctx.font_system, rows, blink);
+        make_text_entries(&mut ctx.font_system, rows, blink, win_style);
 
     // Build TextAreas borrowing from entries — both live for this frame.
     let text_areas: Vec<TextArea<'_>> = entries
@@ -518,9 +614,10 @@ pub fn render_surface(
     state: &mut GpuSurfaceState,
     rows: &[DisplayRow],
     blink: bool,
+    win_style: Option<&core_client::RenderStyle>,
 ) -> Result<(u32, u32), wgpu::SurfaceError> {
     let (entries, win_w, win_h) =
-        state.text_cache.get_or_rebuild(&mut ctx.font_system, rows, blink);
+        state.text_cache.get_or_rebuild(&mut ctx.font_system, rows, blink, win_style);
 
     let text_areas: Vec<TextArea<'_>> = entries
         .iter()

@@ -137,6 +137,7 @@ Overlay windows and indicators are defined in `indicators.json`. Copy `data/indi
 | `width` | no | `240` | Window width in logical pixels |
 | `height` | no | auto | Window height; if omitted, computed from the number of indicators |
 | `indicators` | yes | — | Array of indicator definitions (rows in this window) |
+| `style` | no | — | Style overrides for this window; see **Style object** below |
 
 #### Indicator object
 
@@ -157,6 +158,54 @@ Each entry in `indicators` defines one row in the window.
 | `good_below` | no | — | Colour → `good` when `value < threshold` |
 | `crit_above` | no | — | Colour → `crit` when `value > threshold` |
 | `crit_below` | no | — | Colour → `crit` when `value < threshold` |
+| `style` | no | — | Per-indicator colour overrides; only colour fields take effect (layout fields are ignored at indicator level) |
+
+#### Style object
+
+An optional `style` block can appear on a **window** (all fields honoured) or an **indicator** (colour fields only; layout fields silently ignored at indicator level).
+
+| Field | Type | Description |
+|---|---|---|
+| `font_size` | number | Font size in logical points (window-level only) |
+| `line_height` | number | Row height in logical pixels (window-level only) |
+| `pad_x` | number | Horizontal padding inside the window, in logical pixels (window-level only) |
+| `pad_y` | number | Vertical padding inside the window, in logical pixels (window-level only) |
+| `col_gap` | number | Gap between the label and value columns, in logical pixels (window-level only) |
+| `c_label` | color | Label column text colour |
+| `c_unit` | color | Unit column text colour |
+| `c_warn` | color | Colour used for the `warn` token |
+| `c_crit` | color | Colour used for the `crit` token |
+| `c_good` | color | Colour used for the `good` token |
+| `c_info` | color | Colour used for the `info` token |
+| `c_shadow` | color | Drop-shadow colour (GPU path only) |
+
+Colors can be specified in any of these formats:
+
+| Format | Example |
+|---|---|
+| Hex RGB | `"#FF8040"` |
+| Hex RGBA | `"#FF8040A0"` |
+| CSS rgb() | `"rgb(255, 128, 64)"` |
+| CSS rgba() | `"rgba(255, 128, 64, 160)"` |
+| JSON array RGB | `[255, 128, 64]` |
+| JSON array RGBA | `[255, 128, 64, 160]` |
+
+Example window with a style block:
+
+```json
+{
+  "id": "engine",
+  "x": 10, "y": 10,
+  "style": {
+    "font_size": 18,
+    "c_warn": "#DCDC3C",
+    "c_crit": "#DC3C3C"
+  },
+  "indicators": [
+    { "id": "rpm", "label": "RPM", "formula": "rpm", "format": "integer" }
+  ]
+}
+```
 
 #### Formats
 

@@ -41,6 +41,8 @@
 //! platform colours without knowing about threshold logic.
 
 use serde::{Deserialize, Serialize};
+use serde::de::{self, Deserializer, Visitor};
+use serde::ser::Serializer;
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -62,6 +64,142 @@ pub struct FieldDef {
     pub unit: String,
     #[serde(rename = "type")]
     pub field_type: String,
+}
+
+// ── Indicator definitions ─────────────────────────────────────────────────────
+
+// ── Color type ────────────────────────────────────────────────────────────────
+
+/// Overlay RGBA color (8-bit per channel).
+///
+/// Accepted JSON formats:
+/// - `"#RRGGBB"` / `"#RRGGBBAA"` hex strings
+/// - `[r, g, b]` / `[r, g, b, a]` byte arrays
+/// - `"rgb(r,g,b)"` / `"rgba(r,g,b,a)"` strings (a is 0–255)
+///
+/// Serialises as `"#RRGGBB"` (or `"#RRGGBBAA"` when alpha ≠ 255).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OverlayColor(pub [u8; 4]); // [R, G, B, A]
+
+impl OverlayColor {
+    pub fn rgb(r: u8, g: u8, b: u8) -> Self { Self([r, g, b, 255]) }
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self { Self([r, g, b, a]) }
+    pub fn to_rgba(self) -> [u8; 4] { self.0 }
+}
+
+impl Serialize for OverlayColor {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let [r, g, b, a] = self.0;
+        if a == 255 {
+            s.serialize_str(&format!("#{r:02X}{g:02X}{b:02X}"))
+        } else {
+            s.serialize_str(&format!("#{r:02X}{g:02X}{b:02X}{a:02X}"))
+        }
+    }
+}
+
+struct OverlayColorVisitor;
+
+impl<'de> Visitor<'de> for OverlayColorVisitor {
+    type Value = OverlayColor;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "a color as \"#RRGGBB\", \"#RRGGBBAA\", [r,g,b], [r,g,b,a], \"rgb(r,g,b)\", or \"rgba(r,g,b,a)\"")
+    }
+
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<OverlayColor, E> {
+        let s = v.trim();
+        if let Some(hex) = s.strip_prefix('#') {
+            match hex.len() {
+                6 => {
+                    let r = u8::from_str_radix(&hex[0..2], 16).map_err(de::Error::custom)?;
+                    let g = u8::from_str_radix(&hex[2..4], 16).map_err(de::Error::custom)?;
+                    let b = u8::from_str_radix(&hex[4..6], 16).map_err(de::Error::custom)?;
+                    Ok(OverlayColor([r, g, b, 255]))
+                }
+                8 => {
+                    let r = u8::from_str_radix(&hex[0..2], 16).map_err(de::Error::custom)?;
+                    let g = u8::from_str_radix(&hex[2..4], 16).map_err(de::Error::custom)?;
+                    let b = u8::from_str_radix(&hex[4..6], 16).map_err(de::Error::custom)?;
+                    let a = u8::from_str_radix(&hex[6..8], 16).map_err(de::Error::custom)?;
+                    Ok(OverlayColor([r, g, b, a]))
+                }
+                n => Err(de::Error::custom(format!("hex color must be 6 or 8 hex chars, got {n}")))
+            }
+        } else if let Some(inner) = s.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
+            let parts: Vec<&str> = inner.split(',').collect();
+            if parts.len() != 4 {
+                return Err(de::Error::custom(format!("rgba() needs 4 components, got {}", parts.len())));
+            }
+            let r = parts[0].trim().parse::<u8>().map_err(de::Error::custom)?;
+            let g = parts[1].trim().parse::<u8>().map_err(de::Error::custom)?;
+            let b = parts[2].trim().parse::<u8>().map_err(de::Error::custom)?;
+            let a = parts[3].trim().parse::<u8>().map_err(de::Error::custom)?;
+            Ok(OverlayColor([r, g, b, a]))
+        } else if let Some(inner) = s.strip_prefix("rgb(").and_then(|t| t.strip_suffix(')')) {
+            let parts: Vec<&str> = inner.split(',').collect();
+            if parts.len() != 3 {
+                return Err(de::Error::custom(format!("rgb() needs 3 components, got {}", parts.len())));
+            }
+            let r = parts[0].trim().parse::<u8>().map_err(de::Error::custom)?;
+            let g = parts[1].trim().parse::<u8>().map_err(de::Error::custom)?;
+            let b = parts[2].trim().parse::<u8>().map_err(de::Error::custom)?;
+            Ok(OverlayColor([r, g, b, 255]))
+        } else {
+            Err(de::Error::custom(format!("unknown color format: {s:?}")))
+        }
+    }
+
+    fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<OverlayColor, A::Error> {
+        let r = seq.next_element::<u8>()?.ok_or_else(|| de::Error::custom("missing r component"))?;
+        let g = seq.next_element::<u8>()?.ok_or_else(|| de::Error::custom("missing g component"))?;
+        let b = seq.next_element::<u8>()?.ok_or_else(|| de::Error::custom("missing b component"))?;
+        let a = seq.next_element::<u8>()?.unwrap_or(255);
+        Ok(OverlayColor([r, g, b, a]))
+    }
+}
+
+impl<'de> Deserialize<'de> for OverlayColor {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(OverlayColorVisitor)
+    }
+}
+
+// ── Render style ──────────────────────────────────────────────────────────────
+
+/// Per-window or per-indicator render style overrides.
+///
+/// All fields are `Option`; absent fields fall back to global defaults.
+/// Window-level style applies to all rows in the window.
+/// Indicator-level style applies to that row only — layout fields
+/// (`pad_x`, `pad_y`, `col_gap`, `font_size`, `line_height`) are silently
+/// ignored at the indicator level; only colour overrides take effect.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct RenderStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_y: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub col_gap: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_label: Option<OverlayColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_unit: Option<OverlayColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_warn: Option<OverlayColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_crit: Option<OverlayColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_good: Option<OverlayColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_info: Option<OverlayColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_shadow: Option<OverlayColor>,
 }
 
 // ── Indicator definitions ─────────────────────────────────────────────────────
@@ -120,6 +258,8 @@ pub struct IndicatorDef {
     pub crit_below: Option<Threshold>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_when: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<RenderStyle>,
 }
 
 fn default_format() -> String { "integer".to_string() }
@@ -138,6 +278,8 @@ pub struct WindowDef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
     pub indicators: Vec<IndicatorDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<RenderStyle>,
 }
 
 impl WindowDef {
@@ -545,6 +687,8 @@ pub struct DisplayRow {
     pub value_str: String,
     pub unit: String,
     pub color: String,
+    /// Per-indicator render style (colours only; layout fields ignored at row level).
+    pub style: Option<RenderStyle>,
 }
 
 // ── Window rows ───────────────────────────────────────────────────────────────
@@ -557,6 +701,8 @@ pub struct WindowRows {
     pub width: u32,
     pub height: u32,
     pub rows: Vec<DisplayRow>,
+    /// Window-level render style (applies to all rows unless overridden per-indicator).
+    pub style: Option<RenderStyle>,
 }
 
 // ── Error ─────────────────────────────────────────────────────────────────────
@@ -1017,6 +1163,7 @@ impl Calculator {
                 value_str: format_value(value, &ind.format),
                 unit: ind.unit.clone(),
                 color: resolve_color(value, ind, frame),
+                style: ind.style.clone(),
             });
         }
         rows
@@ -1269,6 +1416,7 @@ impl Client {
             x: 100, y: 100,
             width: None, height: None,
             indicators,
+            style: None,
         };
         Self::with_windows(http, base_url, fields, vec![window])
     }
@@ -1477,14 +1625,14 @@ impl Client {
             let rows = if offline {
                 vec![DisplayRow {
                     label: "WT".into(), value_str: "offline".into(),
-                    unit: String::new(), color: "unit".into(),
+                    unit: String::new(), color: "unit".into(), style: None,
                 }]
             } else {
                 let mut rows = calc.evaluate(&frame);
                 if rows.is_empty() {
                     rows.push(DisplayRow {
                         label: "WT".into(), value_str: "waiting".into(),
-                        unit: String::new(), color: "unit".into(),
+                        unit: String::new(), color: "unit".into(), style: None,
                     });
                 }
                 rows
@@ -1493,6 +1641,7 @@ impl Client {
                 id: wd.id.clone(), x: wd.x, y: wd.y,
                 width: wd.computed_width(), height: wd.computed_height(),
                 rows,
+                style: wd.style.clone(),
             }
         }).collect()
     }
@@ -1512,19 +1661,15 @@ impl Client {
     /// Returns `Ok(())` on success.  On any parse or I/O error the existing
     /// windows are left unchanged and a human-readable message is returned as
     /// `Err(String)` so the caller can surface it to the user.
-    pub fn reload_window_defs(&self) -> Result<(), String> {
+    pub fn reload_window_defs(&self) -> Result<Vec<WindowDef>, String> {
         let new_defs = try_load_window_defs(None)?;
-        let new_windows: Vec<(WindowDef, Calculator)> = new_defs
-            .into_iter()
-            .map(|wd| {
-                let calc = Calculator::new(wd.indicators.clone());
-                (wd, calc)
-            })
+        let new_windows: Vec<(WindowDef, Calculator)> = new_defs.iter()
+            .map(|wd| (wd.clone(), Calculator::new(wd.indicators.clone())))
             .collect();
         if let Ok(mut lock) = self.windows.lock() {
             *lock = new_windows;
         }
-        Ok(())
+        Ok(new_defs)
     }
 }
 
@@ -1545,8 +1690,8 @@ mod tests {
 
     fn make_indicators() -> Vec<IndicatorDef> {
         vec![
-            IndicatorDef { id: "alt".into(), label: "ALT".into(), unit: "m".into(), formula: "altitude_m".into(), format: "integer".into(), color: None, warn_below: None, warn_above: None, good_above: None, good_below: None, crit_above: None, crit_below: None, show_when: Some("valid".into()) },
-            IndicatorDef { id: "fuel".into(), label: "FUEL".into(), unit: "kg".into(), formula: "fuel_kg".into(), format: "integer".into(), color: None, warn_below: Some(Threshold::Fixed(100.0)), warn_above: None, good_above: None, good_below: None, crit_above: None, crit_below: None, show_when: Some("valid".into()) },
+            IndicatorDef { id: "alt".into(), label: "ALT".into(), unit: "m".into(), formula: "altitude_m".into(), format: "integer".into(), color: None, warn_below: None, warn_above: None, good_above: None, good_below: None, crit_above: None, crit_below: None, show_when: Some("valid".into()), style: None },
+            IndicatorDef { id: "fuel".into(), label: "FUEL".into(), unit: "kg".into(), formula: "fuel_kg".into(), format: "integer".into(), color: None, warn_below: Some(Threshold::Fixed(100.0)), warn_above: None, good_above: None, good_below: None, crit_above: None, crit_below: None, show_when: Some("valid".into()), style: None },
         ]
     }
 
@@ -1617,6 +1762,7 @@ mod tests {
             color: None, warn_below: None, warn_above: None, good_above: None, good_below: None,
             crit_above: None, crit_below: None,
             show_when: Some("valid != 0.0 && gear_pct > 0.0".into()),
+            style: None,
         }]);
 
         let mut frame_gear_up = RawFrame::new();
@@ -1641,7 +1787,7 @@ mod tests {
         let calc = Calculator::new(vec![IndicatorDef {
             id: "fuel_pct".into(), label: "FUEL".into(), unit: "%".into(),
             formula: "fuel_kg / fuel_kg0 * 100".into(), format: "decimal1".into(),
-            color: None, warn_below: Some(Threshold::Fixed(20.0)), warn_above: None, good_above: None, good_below: None, crit_above: None, crit_below: None, show_when: None,
+            color: None, warn_below: Some(Threshold::Fixed(20.0)), warn_above: None, good_above: None, good_below: None, crit_above: None, crit_below: None, show_when: None, style: None,
         }]);
         let mut frame = RawFrame::new();
         frame.insert("fuel_kg".into(), 150.0);
@@ -1671,8 +1817,8 @@ mod tests {
         fixtures.insert("/state".to_string(), state_fixture().to_string());
         let http = FixtureHttpClient::new(fixtures);
         let window_defs = vec![
-            WindowDef { id: "flight".to_string(), x: 100, y: 100, width: None, height: None, indicators: vec![make_indicators()[0].clone()] },
-            WindowDef { id: "engine".to_string(), x: 400, y: 100, width: None, height: None, indicators: vec![make_indicators()[1].clone()] },
+            WindowDef { id: "flight".to_string(), x: 100, y: 100, width: None, height: None, indicators: vec![make_indicators()[0].clone()], style: None },
+            WindowDef { id: "engine".to_string(), x: 400, y: 100, width: None, height: None, indicators: vec![make_indicators()[1].clone()], style: None },
         ];
         let client = Client::with_windows(Arc::new(http), "http://localhost:8111".to_string(), make_fields(), window_defs);
         let windows = client.fetch_display_windows();
@@ -2021,5 +2167,60 @@ mod tests {
             json_comments::StripComments::new(src.as_bytes())
         ).expect("parse");
         assert_eq!(v["url"], "http://exmple.com");
+    }
+
+    #[test]
+    fn test_overlay_color_serde_hex_rgb() {
+        let c: OverlayColor = serde_json::from_str(r##""#FF8040""##).unwrap();
+        assert_eq!(c, OverlayColor([0xFF, 0x80, 0x40, 0xFF]));
+        let s = serde_json::to_string(&c).unwrap();
+        assert_eq!(s, r##""#FF8040""##);
+    }
+
+    #[test]
+    fn test_overlay_color_serde_hex_rgba() {
+        let c: OverlayColor = serde_json::from_str(r##""#FF8040A0""##).unwrap();
+        assert_eq!(c, OverlayColor([0xFF, 0x80, 0x40, 0xA0]));
+        let s = serde_json::to_string(&c).unwrap();
+        assert_eq!(s, r##""#FF8040A0""##);
+    }
+
+    #[test]
+    fn test_overlay_color_serde_array_rgb() {
+        let c: OverlayColor = serde_json::from_str("[255, 128, 64]").unwrap();
+        assert_eq!(c, OverlayColor([255, 128, 64, 255]));
+    }
+
+    #[test]
+    fn test_overlay_color_serde_array_rgba() {
+        let c: OverlayColor = serde_json::from_str("[255, 128, 64, 160]").unwrap();
+        assert_eq!(c, OverlayColor([255, 128, 64, 160]));
+    }
+
+    #[test]
+    fn test_overlay_color_serde_rgb_fn() {
+        let c: OverlayColor = serde_json::from_str(r#""rgb(255,128,64)""#).unwrap();
+        assert_eq!(c, OverlayColor([255, 128, 64, 255]));
+    }
+
+    #[test]
+    fn test_overlay_color_serde_rgba_fn() {
+        let c: OverlayColor = serde_json::from_str(r#""rgba(255, 128, 64, 160)""#).unwrap();
+        assert_eq!(c, OverlayColor([255, 128, 64, 160]));
+    }
+
+    #[test]
+    fn test_render_style_roundtrip() {
+        let style = RenderStyle {
+            font_size: Some(24.0),
+            c_warn: Some(OverlayColor([255, 200, 0, 255])),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&style).unwrap();
+        let parsed: RenderStyle = serde_json::from_str(&json).unwrap();
+        assert_eq!(style, parsed);
+        // Absent fields should not appear in the JSON
+        assert!(!json.contains("line_height"));
+        assert!(!json.contains("c_label"));
     }
 }

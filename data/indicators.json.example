@@ -3,14 +3,32 @@
         "id": "flight",
         "x": 550,
         "y": 40,
+        // Optional per-window render style — all fields are optional.
+        // Colours accept "#RRGGBB", "#RRGGBBAA", [R,G,B], [R,G,B,A], or "rgb(r,g,b)"/"rgba(r,g,b,a)".
+        // "style": {
+        //     "font_size": 28,
+        //     "line_height": 36,
+        //     "pad_x": 8,
+        //     "pad_y": 10,
+        //     "col_gap": 12,
+        //     "c_label":  "#FFFFFF",
+        //     "c_unit":   "#C0C0C0",
+        //     "c_warn":   "#DC3C3C",
+        //     "c_crit":   "#DC3C3C",
+        //     "c_good":   "#50C850",
+        //     "c_info":   "#50A0DC",
+        //     "c_shadow": "#000000A0"
+        // },
         "indicators": [
-        {
+            {
                 "id": "airbrake",
                 "label": "ABRK",
                 "formula": "airbrake_pct",
                 "format": "+decimal1",
                 "show_when": "valid",
                 "crit_above": 0
+                // Per-indicator colour override (only colour fields apply, not layout):
+                // "style": { "c_warn": "#FFA500" }
             },
             {
                 "id": "flaps",
