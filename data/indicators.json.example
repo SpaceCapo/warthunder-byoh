@@ -154,5 +154,35 @@
                 "crit_below": "5 * 60"
             }
         ]
-    }
+    },
+    // {
+    //     "id": "vehicle_info",
+    //     "x": 550,
+    //     "y": 700,
+    //     "indicators": [
+    //         {
+    //             // vehicle_name: raw internal name from /indicators "type" (e.g. "p-51d-30").
+    //             // This is a string field — no format/threshold, default color "info".
+    //             "id": "vehicle_name",
+    //             "label": "PLANE",
+    //             "formula": "vehicle_name"
+    //         },
+    //         {
+    //             // fm_name: same as vehicle_name when FM data was found, otherwise "(none)".
+    //             // Shows which flight model record is powering limit indicators.
+    //             "id": "fm_name",
+    //             "label": "FM",
+    //             "formula": "fm_name"
+    //         },
+    //         {
+    //             // fm_loaded: 1 when an FM record was matched, 0 otherwise.
+    //             // Useful as a show_when guard for FM-derived indicators.
+    //             "id": "fm_loaded",
+    //             "label": "FM?",
+    //             "formula": "fm_loaded",
+    //             "format": "integer",
+    //             "good_above": 0
+    //         }
+    //     ]
+    // }
 ]
