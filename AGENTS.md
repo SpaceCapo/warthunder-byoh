@@ -55,6 +55,7 @@ data/
   - `gpu` — wgpu + egui + glyphon (full GPU path; default for release builds).
   - GDI fallback — Win32 GDI text rendering (lightweight, no GPU required).
 - Reads `indicators.json` at startup to know which windows and fields to display.
+- **Position persistence** — `WindowEvent::Moved` updates `window_defs[idx].x/y` in memory; positions are written back to `indicators.json` debounced (800 ms after drag ends) and on every clean exit path. Physical pixel coordinates from winit are converted to logical (DPI-scaled) before saving.
 - Poller runs at 16 ms (≈60 Hz) reading from the core_client cache.
 - Supports configurable position, opacity, refresh interval, and a lock/toggle hotkey.
 - Runs as a separate process — no game process injection.

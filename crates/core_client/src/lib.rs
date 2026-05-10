@@ -104,14 +104,21 @@ pub struct IndicatorDef {
     pub formula: String,
     #[serde(default = "default_format")]
     pub format: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub warn_below: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub warn_above: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub good_above: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub good_below: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub crit_above: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub crit_below: Option<Threshold>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub show_when: Option<String>,
 }
 
@@ -126,7 +133,9 @@ pub struct WindowDef {
     pub x: i32,
     #[serde(default)]
     pub y: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
     pub indicators: Vec<IndicatorDef>,
 }
@@ -865,6 +874,19 @@ pub fn try_load_window_defs(path: Option<&Path>) -> Result<Vec<WindowDef>, Strin
     let stripped = json_comments::StripComments::new(text.as_bytes());
     serde_json::from_reader::<_, Vec<WindowDef>>(stripped)
         .map_err(|e| format!("parse error in {}: {e}", p.display()))
+}
+
+/// Write `defs` back to `path` as pretty-printed JSON.
+///
+/// Called by the overlay after a window drag (debounced) and on exit so that
+/// user-adjusted positions persist across restarts.  Any JSON comments that
+/// were in the original file are lost — the file becomes clean JSON — but all
+/// indicator configuration is preserved verbatim.
+pub fn save_window_defs(path: &Path, defs: &[WindowDef]) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(defs)
+        .map_err(|e| format!("could not serialise window defs: {e}"))?;
+    std::fs::write(path, text)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 // ── App configuration ─────────────────────────────────────────────────────────

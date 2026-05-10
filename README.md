@@ -14,6 +14,7 @@ Displays real-time flight data, vehicle statistics, and session information dire
 - **Data-driven indicators** — define any combination of fields via `indicators.json`; supports expressions, thresholds, and colour tokens
 - **Two render backends** — GPU path (wgpu + egui, default) and a lightweight GDI fallback for Windows
 - **~60 Hz display, ~6 Hz data** — overlay renders smoothly from a cached snapshot; no HTTP on the render hot path
+- **Drag-to-reposition** — left-click drag any overlay window to move it; updated positions are written back to `indicators.json` automatically (debounced 800 ms after the last move, and on clean exit)
  - **Settings window + hot-reload** — GPU builds include a settings window with a simple Settings tab and a "Reload indicators & config" button. Reload validates the files before applying so invalid JSON or expression errors won't replace your running configuration. If reload fails you'll see an error dialog with details.
  - **Persistent config** — `config.json` (next to `indicators.json`) stores visibility preferences (eg. `always_show`, `show_when_byoh_foreground`, `only_during_mission`). The settings UI exposes the most-used toggles; the mission-only toggle is currently hidden in the UI while mission-polling is stabilised but the config key remains supported.
 - **Flight model database** — CSV database of 1,537 aircraft with display names, types, and performance parameters; auto-updates from [warthunder-byo-fm](https://github.com/SpaceCapo/warthunder-byo-fm) releases on startup
@@ -123,6 +124,8 @@ Start War Thunder first. The overlay will display a graceful offline state when 
 ### `indicators.json`
 
 Overlay windows and indicators are defined in `indicators.json`. Copy `data/indicators.json.example` as a starting point. The file is a JSON array; each element defines one transparent overlay window that appears on screen.
+
+> **Position persistence** — dragging any overlay window with the left mouse button updates its `x`/`y` in memory immediately. The changed values are written back to `indicators.json` automatically: 800 ms after the drag ends (debounce), and again on clean exit. Any JSON comments in the original file are removed on the first save (they become clean JSON). To keep the file human-friendly, edit it with the overlay closed or use the hot-reload button after editing.
 
 #### Window object
 
