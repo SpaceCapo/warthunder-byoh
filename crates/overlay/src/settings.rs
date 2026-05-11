@@ -48,6 +48,10 @@ pub struct SettingsWindow {
     reload_error: Arc<Mutex<Option<String>>>,
     /// Currently displayed reload-error message (shown in a modal until dismissed).
     displayed_error: Option<String>,
+    /// Platform-specific directory for config files (indicators.json, config.json).
+    config_dir: std::path::PathBuf,
+    /// Platform-specific directory for FM database files.
+    fm_dir: std::path::PathBuf,
 }
 
 impl SettingsWindow {
@@ -59,6 +63,8 @@ impl SettingsWindow {
         app_config: Arc<RwLock<core_client::AppConfig>>,
         reload_requested: Arc<AtomicBool>,
         reload_error: Arc<Mutex<Option<String>>>,
+        config_dir: std::path::PathBuf,
+        fm_dir: std::path::PathBuf,
     ) -> Option<Self> {
         let attrs = WindowAttributes::default()
             .with_title("War Thunder BYOH")
@@ -117,6 +123,8 @@ impl SettingsWindow {
             reload_requested,
             reload_error,
             displayed_error: None,
+            config_dir,
+            fm_dir,
         })
     }
 
@@ -172,6 +180,8 @@ impl SettingsWindow {
         let mut config_changed = false;
 
         let reload_requested = self.reload_requested.clone();
+        let config_dir = self.config_dir.clone();
+        let fm_dir = self.fm_dir.clone();
 
         let full_output = self.egui_ctx.run(raw_input, |ui_ctx| {
             build_ui(
@@ -184,6 +194,8 @@ impl SettingsWindow {
                 &mut config_changed,
                 &reload_requested,
                 &mut displayed_error,
+                &config_dir,
+                &fm_dir,
             );
         });
 
@@ -261,6 +273,8 @@ fn build_ui(
     config_changed: &mut bool,
     reload_requested: &Arc<AtomicBool>,
     displayed_error: &mut Option<String>,
+    config_dir: &std::path::Path,
+    fm_dir: &std::path::Path,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
@@ -305,6 +319,20 @@ fn build_ui(
                         ui.add_space(4.0);
                         ui.label(format!("FM database: {fm_version_tag}"));
                     }
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(format!("Config dir:  {}", config_dir.display()))
+                            .small()
+                            .weak(),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(format!("FM data dir: {}", fm_dir.display()))
+                            .small()
+                            .weak(),
+                    );
                 });
             }
 
@@ -354,6 +382,19 @@ fn build_ui(
                     .small()
                     .weak(),
                 );
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Open config folder").clicked() {
+                        open_folder(config_dir);
+                    }
+                    if ui.button("Open FM folder").clicked() {
+                        open_folder(fm_dir);
+                    }
+                });
             }
         }
     });
@@ -392,7 +433,7 @@ fn build_ui(
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY),
                     );
-                });
+                    });
                 ui.add_space(8.0);
                 ui.vertical_centered(|ui| {
                     if ui.button("  OK  ").clicked() {
@@ -401,4 +442,21 @@ fn build_ui(
                 });
             });
     }
+}
+
+/// Open `path` in the system file manager (best-effort; failures are silently
+/// ignored because this is a convenience shortcut, not a critical operation).
+fn open_folder(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    { let _ = std::process::Command::new("explorer").arg(path).spawn(); }
+
+    #[cfg(target_os = "macos")]
+    { let _ = std::process::Command::new("open").arg(path).spawn(); }
+
+    #[cfg(target_os = "linux")]
+    { let _ = std::process::Command::new("xdg-open").arg(path).spawn(); }
+
+    // Silently no-op on unknown platforms.
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    { let _ = path; }
 }
