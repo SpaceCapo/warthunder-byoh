@@ -35,7 +35,9 @@ pub struct SettingsWindow {
     /// Set to true when the user clicks File → Exit.
     pub exit_requested: bool,
     /// FM database version tag (e.g. "v2.55.1.88"), empty if unavailable.
-    fm_version_tag: String,
+    /// Wrapped in Arc<Mutex> so the background FM-update thread can write a
+    /// fresh tag after the deferred update completes.
+    fm_version_tag: Arc<Mutex<String>>,
     /// Active tab.
     active_tab: SettingsTab,
     /// Shared application config (read/written by the Settings tab).
@@ -59,7 +61,7 @@ impl SettingsWindow {
         event_loop: &ActiveEventLoop,
         instance: &wgpu::Instance,
         ctx: &GpuContext,
-        fm_version_tag: String,
+        fm_version_tag: Arc<Mutex<String>>,
         app_config: Arc<RwLock<core_client::AppConfig>>,
         reload_requested: Arc<AtomicBool>,
         reload_error: Arc<Mutex<Option<String>>>,
@@ -183,12 +185,17 @@ impl SettingsWindow {
         let config_dir = self.config_dir.clone();
         let fm_dir = self.fm_dir.clone();
 
+        let fm_version_tag_snap = self.fm_version_tag
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+
         let full_output = self.egui_ctx.run(raw_input, |ui_ctx| {
             build_ui(
                 ui_ctx,
                 &mut show_about,
                 &mut exit_requested,
-                &self.fm_version_tag,
+                &fm_version_tag_snap,
                 &mut active_tab,
                 &mut config,
                 &mut config_changed,
@@ -318,6 +325,12 @@ fn build_ui(
                     if !fm_version_tag.is_empty() {
                         ui.add_space(4.0);
                         ui.label(format!("FM database: {fm_version_tag}"));
+                    } else {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("FM database: Unknown")
+                                .color(egui::Color32::from_rgb(160, 160, 160)),
+                        );
                     }
                     ui.add_space(8.0);
                     ui.separator();
