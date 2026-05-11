@@ -1033,21 +1033,55 @@ pub fn find_config(name: &str) -> Option<PathBuf> {
 /// | macOS    | `~/Library/Application Support/warthunder-byoh` |
 ///
 /// The directory is created if it does not already exist (best-effort).
+/// Call [`set_config_dir`] before the first call to override (e.g. `--config-dir` CLI flag).
 pub fn config_dir() -> PathBuf {
+    if let Some(p) = CONFIG_DIR_OVERRIDE.get() { return p.clone(); }
     platform_config_dir()
 }
 
-/// Returns the platform-specific directory containing FM database files
-/// (`fm_data_db.csv`, `fm_names_db.csv`).
+/// Override the platform config directory.  Call once at startup (before any
+/// `config_dir()` / `find_config()` calls), e.g. from a `--config-dir` CLI flag.
+pub fn set_config_dir(p: PathBuf) {
+    let _ = CONFIG_DIR_OVERRIDE.set(p);
+}
+
+/// Returns the FM **root** directory — the directory that contains `version`,
+/// `version_tag`, and the `fm/` CSV subdirectory.
 ///
-/// | Platform | Path |
-/// |----------|------|
+/// | Platform | Default path |
+/// |----------|--------------|
+/// | Windows  | `<exe_dir>/fm/` (or `data/fm/` in dev) |
+/// | Linux    | `<exe_dir>/fm/` (or `data/fm/` in dev) |
+/// | macOS    | `~/Library/Application Support/warthunder-byoh/` |
+///
+/// Call [`set_fm_root`] before the first call to override (e.g. `--fm-dir` CLI flag).
+pub fn fm_root_dir() -> PathBuf {
+    if let Some(p) = FM_ROOT_OVERRIDE.get() { return p.clone(); }
+    platform_fm_root_dir()
+}
+
+/// Override the FM root directory.  Call once at startup (before any
+/// `fm_root_dir()` / `fm_dir()` / `load_fm_db()` calls), e.g. from a `--fm-dir` CLI flag.
+pub fn set_fm_root(p: PathBuf) {
+    let _ = FM_ROOT_OVERRIDE.set(p);
+}
+
+/// Returns the FM CSV directory (`<fm_root>/fm/`), i.e. where
+/// `fm_data_db.csv` and `fm_names_db.csv` live.
+///
+/// | Platform | Default path |
+/// |----------|--------------|
 /// | Windows  | `<exe_dir>/fm/fm/` (or `data/fm/fm/` in dev) |
 /// | Linux    | `<exe_dir>/fm/fm/` (or `data/fm/fm/` in dev) |
 /// | macOS    | `~/Library/Application Support/warthunder-byoh/fm/` |
 pub fn fm_dir() -> PathBuf {
-    platform_fm_dir()
+    fm_root_dir().join("fm")
 }
+
+// ── Static path overrides (set once at startup from CLI flags) ─────────────────
+
+static CONFIG_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static FM_ROOT_OVERRIDE:    std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 // ── platform_config_dir ───────────────────────────────────────────────────────
 
@@ -1102,31 +1136,127 @@ fn platform_config_dir() -> PathBuf {
     PathBuf::from(".")
 }
 
-// ── platform_fm_dir ───────────────────────────────────────────────────────────
+// ── platform_fm_root_dir ──────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn platform_fm_dir() -> PathBuf {
+fn platform_fm_root_dir() -> PathBuf {
+    // On macOS the FM root lives inside Application Support alongside configs.
     if let Some(home) = std::env::var_os("HOME") {
         let p = PathBuf::from(home)
             .join("Library").join("Application Support")
-            .join("warthunder-byoh").join("fm");
+            .join("warthunder-byoh");
         let _ = std::fs::create_dir_all(&p);
         return p;
     }
-    default_fm_dir()
+    default_fm_root_dir()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn platform_fm_dir() -> PathBuf {
-    default_fm_dir()
+fn platform_fm_root_dir() -> PathBuf {
+    default_fm_root_dir()
 }
 
-fn default_fm_dir() -> PathBuf {
+fn default_fm_root_dir() -> PathBuf {
+    // Use exe-relative `fm/` if the CSV subdir exists inside it, otherwise
+    // fall back to `data/fm/` (dev / test environment).
     if let Ok(exe) = std::env::current_exe() {
-        let candidate = exe.parent().unwrap_or(Path::new(".")).join("fm").join("fm");
-        if candidate.exists() { return candidate; }
+        let root = exe.parent().unwrap_or(Path::new(".")).join("fm");
+        if root.join("fm").exists() { return root; }
     }
-    PathBuf::from("data").join("fm").join("fm")
+    PathBuf::from("data").join("fm")
+}
+
+// ── First-run setup helpers ───────────────────────────────────────────────────
+
+/// Describes what initial setup the application needs.
+#[derive(Debug, Clone, Default)]
+pub struct SetupNeeds {
+    /// FM database CSVs are absent from [`fm_dir()`].
+    pub needs_fm: bool,
+    /// `indicators.json` cannot be found by [`find_config`].
+    pub needs_config: bool,
+    /// `indicators.json.example` is available as a seed for `indicators.json`.
+    pub has_example: bool,
+}
+
+impl SetupNeeds {
+    /// Returns `true` if anything needs to be set up before normal operation.
+    pub fn any(&self) -> bool { self.needs_fm || self.needs_config }
+}
+
+/// Check whether the application needs first-run setup.
+pub fn check_setup_needs() -> SetupNeeds {
+    SetupNeeds {
+        needs_fm:     !fm_dir().join("fm_data_db.csv").exists(),
+        needs_config: find_config("indicators.json").is_none(),
+        has_example:  find_config("indicators.json.example").is_some(),
+    }
+}
+
+/// Download and extract the FM database from GitHub into `dest_root`.
+///
+/// `dest_root` is the FM root directory (what `--fm-dir` points to, e.g. `./fm`).
+/// After extraction it will contain `version`, `version_tag`, and `fm/fm_data_db.csv`.
+///
+/// Progress is reported to stderr.
+pub fn download_fm_data(dest_root: &Path) -> Result<(), String> {
+    const URL: &str = "https://github.com/SpaceCapo/warthunder-byo-fm/releases/latest/download/warthunder-byo-fm.zip";
+    eprintln!("[setup] downloading FM database from GitHub…");
+
+    let response = reqwest::blocking::get(URL)
+        .map_err(|e| format!("download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {} from GitHub", response.status()));
+    }
+    let bytes = response.bytes()
+        .map_err(|e| format!("read response body: {e}"))?;
+
+    eprintln!("[setup] {} kB received, extracting to {}", bytes.len() / 1024, dest_root.display());
+    std::fs::create_dir_all(dest_root)
+        .map_err(|e| format!("create directory {}: {e}", dest_root.display()))?;
+
+    let cursor = std::io::Cursor::new(&bytes[..]);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("open zip: {e}"))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)
+            .map_err(|e| format!("zip entry {i}: {e}"))?;
+        let outpath = match entry.enclosed_name() {
+            Some(p) => dest_root.join(p),
+            None    => continue,
+        };
+        if entry.is_dir() {
+            std::fs::create_dir_all(&outpath)
+                .map_err(|e| format!("mkdir {}: {e}", outpath.display()))?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            }
+            let mut out = std::fs::File::create(&outpath)
+                .map_err(|e| format!("create {}: {e}", outpath.display()))?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| format!("write {}: {e}", outpath.display()))?;
+        }
+    }
+
+    eprintln!("[setup] FM database installed to {}", dest_root.display());
+    Ok(())
+}
+
+/// Copy `indicators.json.example` into [`config_dir()`] as `indicators.json`.
+pub fn seed_config_from_example() -> Result<(), String> {
+    let example = find_config("indicators.json.example")
+        .ok_or_else(|| "indicators.json.example not found".to_string())?;
+    let dest_dir = config_dir();
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("mkdir {}: {e}", dest_dir.display()))?;
+    let dest = dest_dir.join("indicators.json");
+    std::fs::copy(&example, &dest)
+        .map_err(|e| format!("copy {} → {}: {e}", example.display(), dest.display()))?;
+    eprintln!("[setup] created {} from {}", dest.display(), example.display());
+    Ok(())
 }
 
 pub fn load_fields(path: Option<&Path>) -> Vec<FieldDef> {
@@ -1452,13 +1582,21 @@ impl Client {
     /// Production constructor: spawns background fetch threads per endpoint.
     pub fn new(base_url: Option<&str>) -> Result<Self, Error> {
         let window_defs = load_window_defs(None);
-        Self::new_with_windows(window_defs, base_url)
+        Self::new_with_windows(window_defs, base_url, false)
     }
 
     /// Production constructor with pre-loaded window defs.
+    ///
+    /// `skip_fm_update` — when `true` the network version-check is skipped and
+    /// the locally-cached version tag is used as-is.  Pass `true` when a setup
+    /// wizard is going to run immediately after construction (the wizard may
+    /// download the FM database for the first time, so running the update-check
+    /// beforehand would be redundant or broken).  The caller is responsible for
+    /// spawning `check_and_update_fm` in a background thread once setup is done.
     pub fn new_with_windows(
         window_defs: Vec<WindowDef>,
         base_url: Option<&str>,
+        skip_fm_update: bool,
     ) -> Result<Self, Error> {
         let fields = load_fields(None);
         // Parse host:port from the base URL for raw-TCP connections.
@@ -1548,7 +1686,11 @@ impl Client {
             .collect();
 
         let fm_base = fm_base_dir();
-        let fm_version_tag = check_and_update_fm(&fm_base);
+        let fm_version_tag = if skip_fm_update {
+            read_fm_version_tag(&fm_base).unwrap_or_default()
+        } else {
+            check_and_update_fm(&fm_base)
+        };
         let fm_db = Arc::new(load_fm_db(None));
 
         Ok(Self {

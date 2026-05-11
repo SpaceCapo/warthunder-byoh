@@ -27,6 +27,14 @@ struct Args {
     /// Output path for the field catalog JSON.
     #[arg(long, default_value = "data/fields.json")]
     out: PathBuf,
+
+    /// Override the FM root directory (where version/fm/ live).
+    #[arg(long)]
+    fm_dir: Option<PathBuf>,
+
+    /// Override the config directory (where indicators.json lives).
+    #[arg(long)]
+    config_dir: Option<PathBuf>,
 }
 
 // ── Field catalog entry ───────────────────────────────────────────────────────
@@ -175,6 +183,13 @@ fn load_existing(path: &PathBuf) -> HashMap<String, FieldEntry> {
 
 fn main() {
     let args = Args::parse();
+
+    if let Some(p) = args.fm_dir {
+        core_client::set_fm_root(p);
+    }
+    if let Some(p) = args.config_dir {
+        core_client::set_config_dir(p);
+    }
 
     let mut existing = load_existing(&args.out);
     let mut scraped: Vec<FieldEntry> = Vec::new();

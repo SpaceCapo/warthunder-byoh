@@ -39,14 +39,51 @@ fn app_icon() -> Option<winit::window::Icon> {
     winit::window::Icon::from_rgba(ICON_RGBA.to_vec(), ICON_WIDTH, ICON_HEIGHT).ok()
 }
 
-// ─── GPU modules (feature = "gpu") ───────────────────────────────────────────
-
 #[cfg(feature = "gpu")]
 mod render_gpu;
 #[cfg(feature = "gpu")]
 mod platform;
 #[cfg(feature = "gpu")]
 mod settings;
+#[cfg(feature = "gpu")]
+mod setup;
+
+// ─── Command-line arguments ───────────────────────────────────────────────────
+
+#[derive(clap::Parser)]
+#[command(name = "warthunder-byoh", about = "War Thunder BYOH overlay")]
+struct OverlayArgs {
+    /// Override the FM root directory (e.g. ./fm/).
+    #[arg(long)]
+    fm_dir: Option<std::path::PathBuf>,
+
+    /// Override the config directory (where indicators.json lives).
+    #[arg(long)]
+    config_dir: Option<std::path::PathBuf>,
+
+    /// Keep the console window visible for debug output (Windows only).
+    #[arg(long)]
+    debug: bool,
+}
+
+/// Parse CLI args, apply any path overrides to core_client, and store the
+/// debug flag in a static so `setup_console()` can read it.
+fn parse_overlay_args() {
+    use clap::Parser;
+    let args = OverlayArgs::parse();
+    if let Some(p) = args.fm_dir {
+        core_client::set_fm_root(p);
+    }
+    if let Some(p) = args.config_dir {
+        core_client::set_config_dir(p);
+    }
+    let _ = DEBUG_MODE.set(args.debug);
+}
+
+static DEBUG_MODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+// ─── GPU modules (feature = "gpu") ───────────────────────────────────────────
+
 
 // ─── GPU render path ─────────────────────────────────────────────────────────
 
@@ -72,6 +109,27 @@ type Shared = Arc<ArcSwap<Vec<core_client::WindowRows>>>;
 /// Generation counter incremented by the poller thread every time new data is stored.
 #[cfg(feature = "gpu")]
 type SharedGen = Arc<std::sync::atomic::AtomicU64>;
+
+// ─── GDI render path imports ─────────────────────────────────────────────────
+
+#[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
+use {
+    arc_swap::ArcSwap,
+    std::collections::HashMap,
+    std::path::PathBuf,
+    winit::{
+        application::ApplicationHandler,
+        dpi::{LogicalPosition, LogicalSize},
+        event::{ElementState, MouseButton, WindowEvent},
+        event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+        keyboard::{KeyCode, PhysicalKey},
+        window::{Window, WindowAttributes, WindowId, WindowLevel},
+    },
+};
+
+/// Shared display data for the GDI path.
+#[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
+type Shared = Arc<ArcSwap<Vec<core_client::WindowRows>>>;
 
 /// Rendering target for one overlay window in the GPU path.
 #[cfg(feature = "gpu")]
@@ -134,6 +192,14 @@ struct GpuApp {
     position_dirty: bool,
     /// Instant of the most recent WindowEvent::Moved — used to debounce writes.
     last_move_at: Option<Instant>,
+    /// First-run setup requirements — consumed once in `resumed()`.
+    setup_needs: Option<core_client::SetupNeeds>,
+    /// Active setup wizard, shown before overlay windows are created.
+    setup_wizard: Option<setup::SetupWizardWindow>,
+    /// When `true`, the FM update check was skipped at startup (because setup
+    /// was needed) and should be run in a background thread once the overlay
+    /// windows are first created.
+    fm_update_deferred: bool,
 }
 
 #[cfg(feature = "gpu")]
@@ -150,7 +216,9 @@ impl GpuApp {
         reload_error: Arc<std::sync::Mutex<Option<String>>>,
         pending_window_defs: Arc<std::sync::Mutex<Option<Vec<WindowDef>>>>,
         indicators_path: Option<PathBuf>,
+        setup_needs: Option<core_client::SetupNeeds>,
     ) -> Self {
+        let fm_update_deferred = setup_needs.as_ref().map_or(false, |n| n.any());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         Self {
             shared,
@@ -176,6 +244,9 @@ impl GpuApp {
             indicators_path,
             position_dirty: false,
             last_move_at: None,
+            setup_needs,
+            setup_wizard: None,
+            fm_update_deferred,
         }
     }
 }
@@ -195,12 +266,43 @@ impl GpuApp {
         self.position_dirty = false;
         self.last_move_at = None;
     }
-}
 
-#[cfg(feature = "gpu")]
-impl ApplicationHandler for GpuApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    /// Create the overlay windows (and settings window) from `self.window_defs`.
+    ///
+    /// Called from `resumed()` when no setup is needed, or from `about_to_wait()`
+    /// after the setup wizard completes.  Reloads `indicators.json` from disk
+    /// first so that a freshly-seeded config is picked up.
+    fn create_overlay_windows(&mut self, event_loop: &ActiveEventLoop) {
         if !self.windows.is_empty() { return; }
+
+        // If the FM update was deferred because setup was pending, kick it off
+        // now in a background thread so it doesn't block the UI.
+        if self.fm_update_deferred {
+            self.fm_update_deferred = false;
+            let fm_base = core_client::fm_base_dir();
+            std::thread::Builder::new()
+                .name("fm-update".to_string())
+                .spawn(move || { core_client::check_and_update_fm(&fm_base); })
+                .ok();
+        }
+
+        // (Re)load window defs from disk — essential when the wizard just
+        // created indicators.json for the first time.
+        let fresh = core_client::load_window_defs(None);
+        if !fresh.is_empty() {
+            self.window_defs    = fresh;
+            self.indicators_path = core_client::find_config("indicators.json");
+            let initial: Vec<core_client::WindowRows> = self.window_defs.iter().map(|wd| {
+                core_client::WindowRows {
+                    id: wd.id.clone(),
+                    x: wd.x, y: wd.y,
+                    width: wd.computed_width(), height: wd.computed_height(),
+                    rows: Vec::new(),
+                    style: wd.style.clone(),
+                }
+            }).collect();
+            self.shared.store(Arc::new(initial));
+        }
 
         let defs: Vec<_> = if self.window_defs.is_empty() {
             vec![WindowDef {
@@ -214,10 +316,11 @@ impl ApplicationHandler for GpuApp {
             self.window_defs.clone()
         };
 
-        // We need to create the GpuContext once we have a surface to test
-        // adapter compatibility against.  On Windows we skip surface creation
-        // (offscreen path) so we initialise the context with no surface.
-        let mut first_ctx: Option<render_gpu::GpuContext> = None;
+        // Ensure GpuContext is available (may have been initialised earlier for
+        // the setup wizard, or we initialise it here for the first time).
+        if self.ctx.is_none() {
+            self.ctx = Some(render_gpu::GpuContext::new(&self.instance, None));
+        }
 
         for (idx, wd) in defs.iter().enumerate() {
             let w = wd.computed_width() as f32;
@@ -229,8 +332,6 @@ impl ApplicationHandler for GpuApp {
                 .with_window_level(WindowLevel::AlwaysOnTop)
                 .with_inner_size(LogicalSize::new(w, h))
                 .with_position(LogicalPosition::new(wd.x, wd.y));
-            // macOS / Linux: winit handles native transparency.
-            // Windows: we set WS_EX_LAYERED ourselves in setup_gpu_window().
             #[cfg(not(target_os = "windows"))]
             { attrs = attrs.with_transparent(true); }
 
@@ -239,29 +340,20 @@ impl ApplicationHandler for GpuApp {
                 Err(e) => { eprintln!("[gpu] create_window '{}': {e}", wd.id); continue; }
             };
             window.set_window_icon(app_icon());
-
-            // Windows: add WS_EX_LAYERED and pin to TOPMOST.
             platform::setup_gpu_window(&window);
 
             let size = window.inner_size();
             let (w_px, h_px) = (size.width.max(1), size.height.max(1));
 
-            // Paint a fully-transparent bitmap immediately so the OS doesn't
-            // show a grey/white default background before the first render.
             #[cfg(target_os = "windows")]
             if let Some(hwnd) = platform::get_hwnd(&window) {
                 let initial = vec![0u8; (w_px * h_px * 4) as usize];
                 platform::update_layered_window_from_pixels(hwnd, &initial, w_px, h_px);
             }
 
-            // ── Build rendering target ────────────────────────────────────────
             #[cfg(target_os = "windows")]
             let target = {
-                // Init GpuContext without a surface (no DXGI surface needed for offscreen).
-                if first_ctx.is_none() && self.ctx.is_none() {
-                    first_ctx = Some(render_gpu::GpuContext::new(&self.instance, None));
-                }
-                let ctx = self.ctx.get_or_insert_with(|| first_ctx.take().unwrap());
+                let ctx = self.ctx.as_ref().unwrap();
                 GpuTarget::Offscreen(render_gpu::GpuOffscreenState::new(ctx, w_px, h_px))
             };
 
@@ -271,10 +363,7 @@ impl ApplicationHandler for GpuApp {
                     Ok(s) => s,
                     Err(e) => { eprintln!("[gpu] create_surface '{}': {e}", wd.id); continue; }
                 };
-                if first_ctx.is_none() && self.ctx.is_none() {
-                    first_ctx = Some(render_gpu::GpuContext::new(&self.instance, Some(&surface)));
-                }
-                let ctx = self.ctx.get_or_insert_with(|| first_ctx.take().unwrap());
+                let ctx = self.ctx.as_ref().unwrap();
                 GpuTarget::Surface(render_gpu::GpuSurfaceState::new(ctx, surface, w_px, h_px))
             };
 
@@ -282,14 +371,12 @@ impl ApplicationHandler for GpuApp {
             self.windows.insert(id, GpuWinState { window, target, idx });
         }
 
-        // Hide all overlay windows from the taskbar / dock.
-        // The settings window (created below) is the taskbar representative.
+        // Hide overlay windows from the taskbar; the settings window represents us.
         for ws in self.windows.values() {
             platform::hide_from_taskbar(&ws.window);
         }
 
-        // Create the settings window.  It needs the GpuContext, which is now
-        // initialised (at least one overlay window was created above).
+        // Create (or recreate) the settings window.
         if self.settings_win.is_none() {
             if let Some(ctx) = self.ctx.as_ref() {
                 self.settings_win = settings::SettingsWindow::new(
@@ -311,6 +398,37 @@ impl ApplicationHandler for GpuApp {
             }
         }
     }
+}
+
+#[cfg(feature = "gpu")]
+impl ApplicationHandler for GpuApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.windows.is_empty() { return; }
+
+        // Eagerly initialise GpuContext (works without a compat surface on all
+        // platforms; the wizard and overlay windows reuse it).
+        if self.ctx.is_none() {
+            self.ctx = Some(render_gpu::GpuContext::new(&self.instance, None));
+        }
+
+        // Show the setup wizard if any prerequisite is missing.
+        if let Some(needs) = self.setup_needs.take() {
+            if needs.any() {
+                if let Some(ctx) = self.ctx.as_ref() {
+                    match setup::SetupWizardWindow::new(event_loop, &self.instance, ctx, needs) {
+                        Some(wiz) => {
+                            wiz.window.set_window_icon(app_icon());
+                            self.setup_wizard = Some(wiz);
+                            return; // defer overlay creation until wizard is done
+                        }
+                        None => eprintln!("[setup] wizard creation failed; proceeding anyway"),
+                    }
+                }
+            }
+        }
+
+        self.create_overlay_windows(event_loop);
+    }
 
     fn window_event(
         &mut self,
@@ -318,6 +436,39 @@ impl ApplicationHandler for GpuApp {
         id: WindowId,
         event: WindowEvent,
     ) {
+        // ── Setup wizard routing ────────────────────────────────────────────────
+        let is_wizard = self.setup_wizard.as_ref().map_or(false, |w| id == w.window_id());
+        if is_wizard {
+            let mut do_exit   = false;
+            let mut do_redraw = false;
+            if let Some(wiz) = self.setup_wizard.as_mut() {
+                wiz.on_event(&event);
+                match &event {
+                    WindowEvent::CloseRequested => { do_exit = true; }
+                    WindowEvent::Resized(s) => {
+                        if let Some(ctx) = self.ctx.as_ref() {
+                            wiz.resize(ctx, s.width, s.height);
+                        }
+                    }
+                    WindowEvent::RedrawRequested => { do_redraw = true; }
+                    _ => {}
+                }
+            }
+            if do_exit {
+                event_loop.exit();
+                return;
+            }
+            if do_redraw {
+                if let Some(ctx) = self.ctx.as_ref() {
+                    if let Some(mut wiz) = self.setup_wizard.take() {
+                        wiz.render(ctx);
+                        self.setup_wizard = Some(wiz);
+                    }
+                }
+            }
+            return;
+        }
+
         // ── Settings window routing ─────────────────────────────────────────────
         // Use flags instead of early-returns so that the settings_win borrow is
         // released before we call save_positions_if_dirty() (which needs &mut self).
@@ -480,6 +631,29 @@ impl ApplicationHandler for GpuApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         const FRAME_MS: u64 = 33; // ~30 fps ceiling
         let now = Instant::now();
+
+        // ── Setup wizard management ─────────────────────────────────────────────
+        if self.setup_wizard.is_some() {
+            if let Some(wiz) = self.setup_wizard.as_ref() {
+                wiz.window.request_redraw();
+                if wiz.exit_requested {
+                    event_loop.exit();
+                    return;
+                }
+            }
+            if self.setup_wizard.as_ref().map_or(false, |w| w.done) {
+                self.setup_wizard = None;
+                // Trigger a poller reload so the client picks up fresh window defs.
+                self.reload_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.create_overlay_windows(event_loop);
+            }
+            // While the wizard is active, redraw at ~60 fps for a responsive UI.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                now + Duration::from_millis(16),
+            ));
+            return;
+        }
+
         let cur_gen   = self.shared_gen.load(std::sync::atomic::Ordering::Relaxed);
         let cur_blink = render_gpu::blink_on();
         let data_changed  = cur_gen   != self.last_gen;
@@ -565,6 +739,7 @@ impl ApplicationHandler for GpuApp {
 /// Entry point for the GPU overlay path.
 #[cfg(feature = "gpu")]
 fn run_gpu_mode() {
+    let setup_needs = core_client::check_setup_needs();
     let window_defs = core_client::load_window_defs(None);
     // Resolve the path now (load_window_defs may have just seeded the file from
     // the example, so find_config is guaranteed to find it if the load succeeded).
@@ -598,7 +773,7 @@ fn run_gpu_mode() {
 
     // Build the client on the main thread so we can read fm_version_tag before
     // handing the client off to the poller thread.
-    let client = match Client::new_with_windows(window_defs.clone(), None) {
+    let client = match Client::new_with_windows(window_defs.clone(), None, setup_needs.any()) {
         Ok(c) => c,
         Err(e) => { eprintln!("[gpu] client init failed: {e}"); return; }
     };
@@ -678,11 +853,12 @@ fn run_gpu_mode() {
             mission_running,
             app_config,
             reload_requested,
-            reload_error,
-            pending_window_defs,
-            indicators_path,
-        ))
-        .expect("run app");
+        reload_error,
+        pending_window_defs,
+        indicators_path,
+        Some(setup_needs),
+    ))
+    .expect("run app");
 }
 
 // ─── Console management (Windows) ────────────────────────────────────────────
@@ -694,7 +870,7 @@ fn run_gpu_mode() {
 /// the window never becomes visible to the user.
 #[cfg(feature = "windows-glue")]
 fn setup_console() {
-    if std::env::args().any(|a| a == "--debug") {
+    if DEBUG_MODE.get().copied().unwrap_or(false) {
         // Keep the console — debug output goes there.
         return;
     }
@@ -707,6 +883,7 @@ fn setup_console() {
 
 #[cfg(feature = "gpu")]
 fn main() {
+    parse_overlay_args();
     eprintln!("warthunder-byoh {}", env!("BYOH_BUILD_VERSION"));
     #[cfg(feature = "windows-glue")]
     setup_console();
@@ -715,29 +892,62 @@ fn main() {
 
 // ─── Windows GDI render path ──────────────────────────────────────────────────
 
+/// Show MessageBox-based setup dialogs when FM or config files are missing.
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
-use {
-    arc_swap::ArcSwap,
-    std::collections::HashMap,
-    std::path::PathBuf,
-    winit::{
-        application::ApplicationHandler,
-        dpi::{LogicalPosition, LogicalSize},
-        event::{ElementState, MouseButton, WindowEvent},
-        event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-        keyboard::{KeyCode, PhysicalKey},
-        window::{Window, WindowAttributes, WindowId, WindowLevel},
-    },
-};
+fn run_gdi_setup_wizard() {
+    use core_client::{check_setup_needs, download_fm_data, seed_config_from_example, fm_root_dir};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_YESNO, MB_OK, MB_ICONWARNING, MB_ICONERROR, MB_ICONINFORMATION, IDYES,
+    };
+    use windows::core::PCWSTR;
 
-/// Shared state: one `WindowRows` per window, updated atomically by the poller.
-#[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
-type Shared = Arc<ArcSwap<Vec<core_client::WindowRows>>>;
+    let needs = check_setup_needs();
+    if !needs.any() { return; }
+
+    fn w(s: &str) -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() }
+    let title = w("War Thunder BYOH \u{2014} Setup");
+
+    if needs.needs_fm {
+        let text = w("FM database not found.\n\nDownload now from GitHub? (~1 MB)");
+        let result = unsafe {
+            MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(title.as_ptr()),
+                        MB_YESNO | MB_ICONWARNING)
+        };
+        if result == IDYES {
+            match download_fm_data(&fm_root_dir()) {
+                Ok(()) => {
+                    let t = w("FM database downloaded successfully.");
+                    unsafe { MessageBoxW(None, PCWSTR(t.as_ptr()), PCWSTR(title.as_ptr()),
+                                        MB_OK | MB_ICONINFORMATION); }
+                }
+                Err(e) => {
+                    let msg = format!("Download failed:\n{e}\n\nThe overlay will start without FM data.");
+                    let t = w(&msg);
+                    unsafe { MessageBoxW(None, PCWSTR(t.as_ptr()), PCWSTR(title.as_ptr()),
+                                        MB_OK | MB_ICONERROR); }
+                }
+            }
+        }
+    }
+
+    if needs.needs_config && needs.has_example {
+        let text = w("indicators.json not found.\n\nCreate from example config?");
+        let result = unsafe {
+            MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(title.as_ptr()),
+                        MB_YESNO | MB_ICONWARNING)
+        };
+        if result == IDYES {
+            let _ = seed_config_from_example();
+        }
+    }
+}
 
 #[cfg(all(feature = "render", feature = "windows-glue", not(feature = "gpu")))]
 fn main() {
+    parse_overlay_args();
     eprintln!("warthunder-byoh {}", env!("BYOH_BUILD_VERSION"));
     setup_console();
+    run_gdi_setup_wizard();
     let window_defs = core_client::load_window_defs(None);
     if window_defs.is_empty() {
         eprintln!("[overlay] no windows defined in indicators.json — using a single empty fallback");
@@ -775,7 +985,7 @@ fn main() {
         let pending_defs    = pending_window_defs.clone();
         let app_cfg         = app_config.clone();
         std::thread::spawn(move || {
-            let client = match Client::new_with_windows(defs, None) {
+            let client = match Client::new_with_windows(defs, None, false) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("[poller] client init failed: {e}"); return; }
             };
@@ -1502,15 +1712,52 @@ mod win32 {
 
 // ─── Linux / no-render fallback ──────────────────────────────────────────────
 
+/// Prompt-based setup for non-GUI paths (CLI poller, Linux render fallback).
+#[cfg(not(any(feature = "gpu", all(feature = "windows-glue", feature = "render"))))]
+fn run_cli_setup_wizard() {
+    use core_client::{check_setup_needs, download_fm_data, seed_config_from_example, fm_root_dir};
+    let needs = check_setup_needs();
+    if !needs.any() { return; }
+
+    if needs.needs_fm {
+        eprint!("[setup] FM database not found. Download from GitHub? [y/N] ");
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_ok()
+            && line.trim().eq_ignore_ascii_case("y")
+        {
+            eprintln!("[setup] downloading…");
+            match download_fm_data(&fm_root_dir()) {
+                Ok(())  => eprintln!("[setup] FM database downloaded."),
+                Err(e)  => eprintln!("[setup] download failed: {e}"),
+            }
+        }
+    }
+
+    if needs.needs_config && needs.has_example {
+        eprint!("[setup] indicators.json not found. Create from example? [y/N] ");
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_ok()
+            && line.trim().eq_ignore_ascii_case("y")
+        {
+            let _ = seed_config_from_example();
+        }
+    }
+}
+
 #[cfg(all(feature = "render", not(feature = "windows-glue"), not(feature = "gpu")))]
 fn main() {
-    eprintln!("warthunder-byoh {} — Linux overlay not yet implemented, running CLI poller", env!("BYOH_BUILD_VERSION"));
+    parse_overlay_args();
+    eprintln!("warthunder-byoh {} — Linux overlay not yet implemented, running CLI poller",
+              env!("BYOH_BUILD_VERSION"));
+    run_cli_setup_wizard();
     run_cli_mode();
 }
 
 #[cfg(not(feature = "render"))]
 fn main() {
+    parse_overlay_args();
     eprintln!("warthunder-byoh {}", env!("BYOH_BUILD_VERSION"));
+    run_cli_setup_wizard();
     run_cli_mode();
 }
 
