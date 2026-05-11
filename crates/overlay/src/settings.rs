@@ -313,7 +313,7 @@ fn build_ui(
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new(concat!("Build: ", env!("BYOH_BUILD_VERSION")))
-                            .weak()
+                            .color(egui::Color32::from_rgb(200, 200, 200))
                     );
                     if !fm_version_tag.is_empty() {
                         ui.add_space(4.0);
@@ -325,13 +325,13 @@ fn build_ui(
                     ui.label(
                         egui::RichText::new(format!("Config dir:  {}", config_dir.display()))
                             .small()
-                            .weak(),
+                            .color(egui::Color32::from_rgb(200, 200, 200)),
                     );
                     ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new(format!("FM data dir: {}", fm_dir.display()))
                             .small()
-                            .weak(),
+                            .color(egui::Color32::from_rgb(200, 200, 200)),
                     );
                 });
             }
@@ -380,7 +380,7 @@ fn build_ui(
                          Window layout changes (positions, new windows) require a restart."
                     )
                     .small()
-                    .weak(),
+                    .color(egui::Color32::from_rgb(200, 200, 200)),
                 );
 
                 ui.add_space(12.0);
