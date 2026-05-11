@@ -448,7 +448,17 @@ fn build_ui(
 /// ignored because this is a convenience shortcut, not a critical operation).
 fn open_folder(path: &std::path::Path) {
     #[cfg(target_os = "windows")]
-    { let _ = std::process::Command::new("explorer").arg(path).spawn(); }
+    {
+        // `explorer <path>` is unreliable from a Windows-subsystem process.
+        // `cmd /c start "" <path>` works consistently; CREATE_NO_WINDOW
+        // suppresses the brief console flash.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path.display().to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    }
 
     #[cfg(target_os = "macos")]
     { let _ = std::process::Command::new("open").arg(path).spawn(); }
