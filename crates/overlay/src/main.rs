@@ -300,6 +300,8 @@ impl ApplicationHandler for GpuApp {
                     self.app_config.clone(),
                     self.reload_requested.clone(),
                     self.reload_error.clone(),
+                    core_client::config_dir(),
+                    core_client::fm_dir(),
                 );
                 if let Some(sw) = self.settings_win.as_ref() {
                     sw.window.set_window_icon(app_icon());

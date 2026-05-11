@@ -352,14 +352,11 @@ pub type FmDb = HashMap<String, FmRecord>;
 pub fn load_fm_db(data_dir: Option<&Path>) -> FmDb {
     let mut db = FmDb::new();
 
-    // Resolve directory: caller-provided, or <exe_dir>/fm/fm/, or data/fm/fm/
+    // Resolve directory: caller-provided, or platform FM directory.
     let fm_dir: PathBuf = if let Some(d) = data_dir {
         d.to_path_buf()
-    } else if let Ok(exe) = std::env::current_exe() {
-        let candidate = exe.parent().unwrap_or(Path::new(".")).join("fm").join("fm");
-        if candidate.exists() { candidate } else { PathBuf::from("data").join("fm").join("fm") }
     } else {
-        PathBuf::from("data").join("fm").join("fm")
+        fm_dir()
     };
 
     let names_path = fm_dir.join("fm_names_db.csv");
@@ -1007,6 +1004,11 @@ type EndpointCache = Arc<RwLock<HashMap<String, JsonValue>>>;
 // ── Config loading ────────────────────────────────────────────────────────────
 
 pub fn find_config(name: &str) -> Option<PathBuf> {
+    // 1. Platform config directory (XDG / AppSupport / exe-dir on Windows).
+    let p = config_dir().join(name);
+    if p.exists() { return Some(p); }
+
+    // 2. Exe-relative fallback (Windows portable builds, dev mode).
     if let Ok(exe) = std::env::current_exe() {
         let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
         let p = exe_dir.join("data").join(name);
@@ -1014,9 +1016,117 @@ pub fn find_config(name: &str) -> Option<PathBuf> {
         let p = exe_dir.join(name);
         if p.exists() { return Some(p); }
     }
+
+    // 3. CWD-relative fallback (tests and local dev runs).
     let p = PathBuf::from("data").join(name);
     if p.exists() { return Some(p); }
     None
+}
+
+/// Returns the platform-specific directory for user config files
+/// (`indicators.json`, `config.json`).
+///
+/// | Platform | Path |
+/// |----------|------|
+/// | Windows  | Directory containing the executable |
+/// | Linux    | `$XDG_CONFIG_HOME/warthunder-byoh` or `~/.config/warthunder-byoh` |
+/// | macOS    | `~/Library/Application Support/warthunder-byoh` |
+///
+/// The directory is created if it does not already exist (best-effort).
+pub fn config_dir() -> PathBuf {
+    platform_config_dir()
+}
+
+/// Returns the platform-specific directory containing FM database files
+/// (`fm_data_db.csv`, `fm_names_db.csv`).
+///
+/// | Platform | Path |
+/// |----------|------|
+/// | Windows  | `<exe_dir>/fm/fm/` (or `data/fm/fm/` in dev) |
+/// | Linux    | `<exe_dir>/fm/fm/` (or `data/fm/fm/` in dev) |
+/// | macOS    | `~/Library/Application Support/warthunder-byoh/fm/` |
+pub fn fm_dir() -> PathBuf {
+    platform_fm_dir()
+}
+
+// ── platform_config_dir ───────────────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn platform_config_dir() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(p) = exe.parent() {
+            return p.to_path_buf();
+        }
+    }
+    PathBuf::from(".")
+}
+
+#[cfg(target_os = "linux")]
+fn platform_config_dir() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        let p = PathBuf::from(xdg).join("warthunder-byoh");
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join(".config").join("warthunder-byoh");
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(p) = exe.parent() { return p.to_path_buf(); }
+    }
+    PathBuf::from(".")
+}
+
+#[cfg(target_os = "macos")]
+fn platform_config_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home)
+            .join("Library").join("Application Support")
+            .join("warthunder-byoh");
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(p) = exe.parent() { return p.to_path_buf(); }
+    }
+    PathBuf::from(".")
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+fn platform_config_dir() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(p) = exe.parent() { return p.to_path_buf(); }
+    }
+    PathBuf::from(".")
+}
+
+// ── platform_fm_dir ───────────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn platform_fm_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home)
+            .join("Library").join("Application Support")
+            .join("warthunder-byoh").join("fm");
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
+    default_fm_dir()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_fm_dir() -> PathBuf {
+    default_fm_dir()
+}
+
+fn default_fm_dir() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        let candidate = exe.parent().unwrap_or(Path::new(".")).join("fm").join("fm");
+        if candidate.exists() { return candidate; }
+    }
+    PathBuf::from("data").join("fm").join("fm")
 }
 
 pub fn load_fields(path: Option<&Path>) -> Vec<FieldDef> {
@@ -1041,9 +1151,11 @@ pub fn try_load_window_defs(path: Option<&Path>) -> Result<Vec<WindowDef>, Strin
     // so the user gets a working default without overwriting any existing config.
     if path.is_none() && find_config("indicators.json").is_none() {
         if let Some(example) = find_config("indicators.json.example") {
-            let dest = example.with_file_name("indicators.json");
+            // Write the seed file into the platform config directory so that it
+            // ends up alongside config.json (important on Linux / macOS).
+            let dest = config_dir().join("indicators.json");
             match std::fs::copy(&example, &dest) {
-                Ok(_) => eprintln!("[core_client] created indicators.json from indicators.json.example"),
+                Ok(_) => eprintln!("[core_client] created {} from indicators.json.example", dest.display()),
                 Err(e) => eprintln!("[core_client] could not seed indicators.json: {e}"),
             }
         }
@@ -1125,17 +1237,15 @@ impl AppConfig {
         }
     }
 
-    /// Save to `config.json` in the same directory as `indicators.json`,
-    /// falling back to the executable directory.
+    /// Save to `config.json` in the platform config directory, updating an
+    /// existing file in place when one is already present.
     pub fn save(&self) {
+        // Prefer updating an existing config.json wherever it currently lives;
+        // otherwise target the platform config directory.
         let path = if let Some(p) = find_config("config.json") {
             p
-        } else if let Some(p) = find_config("indicators.json") {
-            p.with_file_name("config.json")
-        } else if let Ok(exe) = std::env::current_exe() {
-            exe.with_file_name("config.json")
         } else {
-            PathBuf::from("config.json")
+            config_dir().join("config.json")
         };
         match serde_json::to_string_pretty(self) {
             Ok(text) => {
@@ -1574,7 +1684,7 @@ impl Client {
     ///
     /// `RawFrame`   — numeric fields extracted from all registered endpoints
     ///                plus FM-derived and virtual fields.
-    /// `StringFrame` — string fields: currently `vehicle_name` and `fm_name`.
+    /// `StringFrame` — string fields: `vehicle_name`, `fm_name`, `config_dir`, `fm_dir`.
     pub fn fetch_raw(&self) -> (RawFrame, StringFrame) {
         let mut frame = RawFrame::new();
         let mut vehicle_name: Option<String> = None;
@@ -1664,6 +1774,10 @@ impl Client {
             sframe.insert("vehicle_name".into(), name.clone());
             sframe.insert("fm_name".into(), if fm_found { name.clone() } else { "(none)".into() });
         }
+        // Always expose the platform config and FM directories so that they
+        // can be displayed as info rows in the overlay or settings window.
+        sframe.insert("config_dir".into(), config_dir().display().to_string());
+        sframe.insert("fm_dir".into(), fm_dir().display().to_string());
 
         (frame, sframe)
     }
