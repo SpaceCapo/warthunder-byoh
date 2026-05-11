@@ -166,8 +166,10 @@ struct GpuApp {
     last_blink: bool,
     /// Settings / about window (always present; owns the taskbar entry).
     settings_win: Option<settings::SettingsWindow>,
-    /// FM database version tag to show in the settings window.
-    fm_version_tag: String,
+    /// FM database version tag to show in the settings window.  Wrapped in
+    /// Arc<Mutex> so the background fm-update thread can write a fresh tag
+    /// after a deferred update completes.
+    fm_version_tag: Arc<std::sync::Mutex<String>>,
     /// Whether War Thunder is currently the foreground window.
     wt_foreground: Arc<std::sync::atomic::AtomicBool>,
     /// Whether the BYOH settings window is focused.
@@ -220,6 +222,7 @@ impl GpuApp {
     ) -> Self {
         let fm_update_deferred = setup_needs.as_ref().map_or(false, |n| n.any());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let fm_version_tag = Arc::new(std::sync::Mutex::new(fm_version_tag));
         Self {
             shared,
             shared_gen,
@@ -280,9 +283,15 @@ impl GpuApp {
         if self.fm_update_deferred {
             self.fm_update_deferred = false;
             let fm_base = core_client::fm_base_dir();
+            let tag_arc = self.fm_version_tag.clone();
             std::thread::Builder::new()
                 .name("fm-update".to_string())
-                .spawn(move || { core_client::check_and_update_fm(&fm_base); })
+                .spawn(move || {
+                    let new_tag = core_client::check_and_update_fm(&fm_base);
+                    if let Ok(mut lock) = tag_arc.lock() {
+                        *lock = new_tag;
+                    }
+                })
                 .ok();
         }
 
