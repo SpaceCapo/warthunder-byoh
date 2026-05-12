@@ -31,12 +31,18 @@ mod windows_impl {
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
         SelectObject, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, HGDIOBJ,
+        MonitorFromWindow, MONITOR_DEFAULTTONEAREST,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, GWLP_HWNDPARENT,
         HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
         UpdateLayeredWindow, ULW_ALPHA, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
         WS_EX_TRANSPARENT, GetWindowThreadProcessId,
+    };
+    use windows::Win32::UI::Shell::ITaskbarList;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize,
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -88,9 +94,56 @@ mod windows_impl {
         }
     }
 
+    // CLSID_TaskbarList = {56FDF344-FD6D-11d0-958A-006097C9A090}
+    const CLSID_TASKBAR_LIST: windows::core::GUID = windows::core::GUID {
+        data1: 0x56fdf344,
+        data2: 0xfd6d,
+        data3: 0x11d0,
+        data4: [0x95, 0x8a, 0x00, 0x60, 0x97, 0xc9, 0xa0, 0x90],
+    };
+
+    /// Call when the settings window moves.  Checks whether it has crossed to a
+    /// new monitor; if so, tells the Windows Shell taskbar to re-evaluate which
+    /// monitor's taskbar should host the button.
+    ///
+    /// `last_monitor` persists the raw `HMONITOR` value between calls so we
+    /// only hit the Shell on an actual monitor crossing, not every pixel move.
+    pub fn update_taskbar_if_monitor_changed(
+        window: &winit::window::Window,
+        last_monitor: &mut Option<isize>,
+    ) {
+        let Some(hwnd) = get_hwnd(window) else { return };
+        unsafe {
+            let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            let mon_val = monitor.0;
+            if Some(mon_val) == *last_monitor {
+                return;
+            }
+            *last_monitor = Some(mon_val);
+
+            // Use ITaskbarList to explicitly deregister + re-register the window.
+            // AddTab causes the Shell to call MonitorFromWindow internally and
+            // place the button on the monitor the window is currently on.
+            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let com_was_uninit = hr.is_ok(); // S_OK = we initialised it
+            let tbl_result: windows::core::Result<ITaskbarList> = CoCreateInstance(
+                &CLSID_TASKBAR_LIST,
+                None::<&windows::core::IUnknown>,
+                CLSCTX_INPROC_SERVER,
+            );
+            if let Ok(tbl) = tbl_result {
+                let _ = tbl.HrInit();
+                let _ = tbl.DeleteTab(hwnd);
+                let _ = tbl.AddTab(hwnd);
+            }
+            if com_was_uninit {
+                CoUninitialize();
+            }
+        }
+    }
+
     /// Set `WS_EX_TOOLWINDOW` and clear `WS_EX_APPWINDOW` so the overlay window
     /// does not appear in the taskbar or Alt-Tab switcher.
-    /// Call after `setup_gpu_window`.
     pub fn hide_from_taskbar(window: &winit::window::Window) {
         let Some(hwnd) = get_hwnd(window) else { return };
         unsafe {
@@ -220,6 +273,13 @@ pub fn setup_gpu_window(_window: &winit::window::Window) {
 /// No-op on non-Windows: taskbar pinning is a Windows-only concept.
 #[cfg(not(feature = "windows-glue"))]
 pub fn pin_to_taskbar(_window: &winit::window::Window) {}
+
+/// No-op on non-Windows: ITaskbarList is a Windows-only interface.
+#[cfg(not(feature = "windows-glue"))]
+pub fn update_taskbar_if_monitor_changed(
+    _window: &winit::window::Window,
+    _last_monitor: &mut Option<isize>,
+) {}
 
 /// Hide the overlay window from the taskbar / dock window list.
 ///

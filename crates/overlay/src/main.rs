@@ -208,6 +208,9 @@ struct GpuApp {
     /// was needed) and should be run in a background thread once the overlay
     /// windows are first created.
     fm_update_deferred: bool,
+    /// Last known `HMONITOR` (as raw isize) for the settings window, used to
+    /// detect monitor crossings and refresh the taskbar button placement.
+    settings_monitor: Option<isize>,
 }
 
 #[cfg(feature = "gpu")]
@@ -260,6 +263,7 @@ impl GpuApp {
             setup_needs,
             setup_wizard: None,
             fm_update_deferred,
+            settings_monitor: None,
         }
     }
 }
@@ -421,9 +425,15 @@ impl GpuApp {
                 );
                 if let Some(sw) = self.settings_win.as_ref() {
                     sw.window.set_window_icon(app_icon());
-                    // Explicitly set WS_EX_APPWINDOW so the taskbar button is
-                    // owned by this window and follows it across monitors.
+                    // Window was created hidden (with_visible(false)) so we can
+                    // apply the taskbar style fix before the Shell ever sees it.
+                    // The Shell registers a fresh taskbar entry on the first
+                    // SW_SHOW, at which point WS_EX_APPWINDOW is already set and
+                    // GWLP_HWNDPARENT is already cleared — so the button is
+                    // owned by this window from the start and will follow it
+                    // correctly as it moves across monitors.
                     platform::pin_to_taskbar(&sw.window);
+                    sw.window.set_visible(true);
                 } else {
                     eprintln!("[gpu] failed to create settings window");
                 }
@@ -508,6 +518,7 @@ impl ApplicationHandler for GpuApp {
         if is_settings {
             let mut do_exit   = false;
             let mut do_redraw = false;
+            let mut do_taskbar_refresh = false;
             if let Some(sw) = self.settings_win.as_mut() {
                 sw.on_event(&event);
                 match &event {
@@ -519,10 +530,21 @@ impl ApplicationHandler for GpuApp {
                         }
                     }
                     WindowEvent::RedrawRequested => { do_redraw = true; }
+                    // Re-sync the taskbar button to the correct per-monitor
+                    // taskbar whenever the settings window moves.
+                    WindowEvent::Moved(_) => { do_taskbar_refresh = true; }
                     _ => {}
                 }
             }
             // settings_win borrow fully released — all of self is writable again.
+            if do_taskbar_refresh {
+                if let Some(sw) = self.settings_win.as_ref() {
+                    platform::update_taskbar_if_monitor_changed(
+                        &sw.window,
+                        &mut self.settings_monitor,
+                    );
+                }
+            }
             if do_exit {
                 self.save_positions_if_dirty();
                 event_loop.exit();
