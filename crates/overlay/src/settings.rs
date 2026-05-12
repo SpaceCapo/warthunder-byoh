@@ -67,12 +67,18 @@ impl SettingsWindow {
         reload_error: Arc<Mutex<Option<String>>>,
         config_dir: std::path::PathBuf,
         fm_dir: std::path::PathBuf,
+        // Optional position hint so the window opens on the same monitor as the
+        // overlay windows (and therefore appears in the correct per-monitor taskbar).
+        hint_pos: Option<winit::dpi::LogicalPosition<i32>>,
     ) -> Option<Self> {
-        let attrs = WindowAttributes::default()
+        let mut attrs = WindowAttributes::default()
             .with_title("War Thunder BYOH")
             .with_decorations(true)
             .with_resizable(false)
             .with_inner_size(winit::dpi::LogicalSize::new(420u32, 260u32));
+        if let Some(pos) = hint_pos {
+            attrs = attrs.with_position(pos);
+        }
 
         let window = Arc::new(event_loop.create_window(attrs).ok()?);
         let size = window.inner_size();

@@ -1157,13 +1157,13 @@ fn platform_fm_root_dir() -> PathBuf {
 }
 
 fn default_fm_root_dir() -> PathBuf {
-    // Use exe-relative `fm/` if the CSV subdir exists inside it, otherwise
-    // fall back to `data/fm/` (dev / test environment).
-    if let Ok(exe) = std::env::current_exe() {
-        let root = exe.parent().unwrap_or(Path::new(".")).join("fm");
-        if root.join("fm").exists() { return root; }
-    }
-    PathBuf::from("data").join("fm")
+    // Delegate to the same heuristic used by check_and_update_fm: if the exe
+    // is NOT inside a `target/` directory we are in a deployed build and use
+    // `<exe_dir>/fm/`; otherwise fall back to `data/fm/` for the dev environment.
+    //
+    // The previous guard (`root.join("fm").exists()`) failed on first run
+    // because the `fm/` sub-directory hasn't been created yet.
+    fm_update::fm_base_dir()
 }
 
 // ── First-run setup helpers ───────────────────────────────────────────────────

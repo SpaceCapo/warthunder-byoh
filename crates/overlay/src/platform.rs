@@ -63,6 +63,19 @@ mod windows_impl {
         }
     }
 
+    /// Set `WS_EX_APPWINDOW` and clear `WS_EX_TOOLWINDOW` so the window is
+    /// pinned into the per-monitor taskbar and its button follows the window
+    /// as it is dragged between monitors.
+    pub fn pin_to_taskbar(window: &winit::window::Window) {
+        let Some(hwnd) = get_hwnd(window) else { return };
+        unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let new_ex = (ex | WS_EX_APPWINDOW.0 as isize)
+                       & !(WS_EX_TOOLWINDOW.0 as isize);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+        }
+    }
+
     /// Set `WS_EX_TOOLWINDOW` and clear `WS_EX_APPWINDOW` so the overlay window
     /// does not appear in the taskbar or Alt-Tab switcher.
     /// Call after `setup_gpu_window`.

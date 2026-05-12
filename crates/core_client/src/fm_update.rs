@@ -244,6 +244,24 @@ pub fn check_and_update_fm(fm_base: &Path) -> String {
     }
 
     eprintln!("[fm_update] FM updated to {remote_tag}");
+
+    // ── 7. Remove the backup dir now that the update succeeded ────────────────
+    // Also prune any older version-tagged backup dirs left by previous updates.
+    if let Ok(entries) = std::fs::read_dir(fm_base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if parse_quad(name).is_some() {
+                    match std::fs::remove_dir_all(&path) {
+                        Ok(()) => eprintln!("[fm_update] removed old backup {}", path.display()),
+                        Err(e) => eprintln!("[fm_update] could not remove backup {}: {e}", path.display()),
+                    }
+                }
+            }
+        }
+    }
+
     remote_tag
 }
 
