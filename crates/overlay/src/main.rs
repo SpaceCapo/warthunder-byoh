@@ -733,14 +733,17 @@ impl ApplicationHandler for GpuApp {
             self.overlays_visible = should_show;
         }
 
-        // Redraw when focus changes (to clear or restore the overlay) or when
-        // data/blink changes while overlays are visible.
-        let should_redraw = focus_changed || (should_show && (data_changed || blink_changed));
+        // Redraw whenever data/blink changes or the show/hide state transitions.
+        // We intentionally do NOT gate on should_show here: the RedrawRequested
+        // handler already paints fully transparent when overlays_visible is false,
+        // so the only cost of rendering while hidden is minimal GPU work.  Gating
+        // here caused a regression where the overlay would freeze if the app was
+        // started before War Thunder was in the foreground, because should_show
+        // was false and request_redraw was never called.
+        let should_redraw = data_changed || blink_changed || focus_changed;
         if should_redraw {
-            if should_show {
-                self.last_gen   = cur_gen;
-                self.last_blink = cur_blink;
-            }
+            self.last_gen   = cur_gen;
+            self.last_blink = cur_blink;
             self.last_redraw = now;
             for ws in self.windows.values() {
                 ws.window.request_redraw();

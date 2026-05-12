@@ -47,18 +47,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: fm
-          path: .
-      - name: Flatten
-        run: |
-          echo "----- data -----"
-          find ./data -print
-          echo "-----  fm  -----"
-          find ./fm -print
-          mv ./fm/* ./data/
-          rm -rf ./fm 
-      - name: Debugdir
-        run: |
-          find ./data -print
+          path: data
       - name: Build and package macos
         id: package-macos
         env:
@@ -97,15 +86,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: fm
-          path: .
-      - name: Flatten
-        run: |
-          echo "----- data -----"
-          find ./data -print
-          echo "-----  fm  -----"
-          find ./fm -print
-          mv ./fm/* ./data/
-          rm -rf ./fm 
+          path: data
       - name: Build and package linux
         id: package-linux
         env:
@@ -144,15 +125,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: fm
-          path: .
-      - name: Flatten
-        run: |
-          echo "----- data -----"
-          find ./data -print
-          echo "-----  fm  -----"
-          find ./fm -print
-          mv ./fm/* ./data/
-          rm -rf ./fm      
+          path: data
       - name: Build and package windows
         id: package-windows
         env:

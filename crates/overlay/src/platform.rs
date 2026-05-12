@@ -35,7 +35,7 @@ mod windows_impl {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, GWLP_HWNDPARENT,
-        HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+        HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
         UpdateLayeredWindow, ULW_ALPHA, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
         WS_EX_TRANSPARENT, GetWindowThreadProcessId,
     };
@@ -87,9 +87,11 @@ mod windows_impl {
             SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0);
             // SWP_FRAMECHANGED flushes SetWindowLongPtr changes to the shell
             // so the taskbar button appears/updates immediately.
+            // SWP_NOZORDER keeps the settings window in its current z-position;
+            // HWND_TOPMOST would make it always-on-top which is not desired.
             let _ = SetWindowPos(
-                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+                hwnd, windows::Win32::Foundation::HWND(0), 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             );
         }
     }
