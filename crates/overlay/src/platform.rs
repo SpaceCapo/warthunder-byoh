@@ -288,9 +288,10 @@ pub fn update_taskbar_if_monitor_changed(
 /// true always-on-top overlay.
 ///
 /// - Windows: `WS_EX_TOOLWINDOW` is handled in the `windows-glue` module above.
-/// - macOS: Sets window level to `NSFloatingWindowLevel` (5) so the window
-///   sits above normal app windows, and configures `collectionBehavior` so the
-///   overlay appears on every Space and in fullscreen apps.
+/// - macOS: Sets window level to `NSScreenSaverWindowLevel` (1000) so the
+///   window sits above fullscreen game windows, and configures
+///   `collectionBehavior` so the overlay appears on every Space and inside
+///   fullscreen apps.
 /// - Linux: no-op (X11 `_NET_WM_WINDOW_TYPE_UTILITY` TODO).
 #[cfg(not(feature = "windows-glue"))]
 pub fn hide_from_taskbar(window: &winit::window::Window) {
@@ -322,13 +323,13 @@ pub fn hide_from_taskbar(window: &winit::window::Window) {
                     let ns_window = send_ptr(h.ns_view.as_ptr() as *mut std::ffi::c_void, sel_window);
                     if ns_window.is_null() { return; }
 
-                    // Set window level to NSFloatingWindowLevel (5).
-                    // This places the overlay above all normal application windows,
-                    // fixing the "disappears when focus is lost" problem that occurs
-                    // when winit's WindowLevel::AlwaysOnTop (NSNormalWindowLevel+1)
-                    // is used, which is still below the active app's windows.
+                    // Set window level to NSScreenSaverWindowLevel (1000).
+                    // This is the highest standard macOS window level and
+                    // places the overlay above fullscreen game windows.
+                    // NSFloatingWindowLevel (5) was insufficient — it sits
+                    // below the game's Metal/fullscreen surface.
                     let sel_level = sel_registerName(b"setLevel:\0".as_ptr() as *const std::ffi::c_char);
-                    send_i64(ns_window, sel_level, 5); // NSFloatingWindowLevel = 5
+                    send_i64(ns_window, sel_level, 1000); // NSScreenSaverWindowLevel
 
                     // collectionBehavior flags:
                     //   NSWindowCollectionBehaviorCanJoinAllSpaces  = 1 << 0  (1)
