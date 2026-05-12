@@ -50,7 +50,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 pub mod fm_update;
-pub use fm_update::{check_and_update_fm, fm_base_dir, read_fm_version_tag};
+pub use fm_update::{
+    check_and_update_fm, check_fm_update_available, install_fm_update,
+    fm_base_dir, read_fm_version_tag,
+};
 
 // ── Field catalog ─────────────────────────────────────────────────────────────
 

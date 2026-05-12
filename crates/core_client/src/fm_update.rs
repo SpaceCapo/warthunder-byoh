@@ -84,66 +84,42 @@ fn build_client() -> Option<reqwest::blocking::Client> {
         .ok()
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry points ───────────────────────────────────────────────────────
 
-/// Check for a newer FM release on GitHub and update the local database if one
-/// is available.
+/// Check whether a newer FM release is available on GitHub **without** making
+/// any local changes.
 ///
-/// Returns the version tag string that should be displayed in the overlay
-/// (e.g. `"v2.55.1.88"`).  Returns an empty string if no version info is
-/// available.
-pub fn check_and_update_fm(fm_base: &Path) -> String {
+/// Returns `Some((remote_tag, download_url))` when an update is available,
+/// `None` when the local database is already current or a network error occurs.
+///
+/// This is the lightweight half of the update flow — call it on a background
+/// thread and present the result to the user before downloading anything.
+pub fn check_fm_update_available(fm_base: &Path) -> Option<(String, String)> {
     let local_tag = read_fm_version_tag(fm_base).unwrap_or_default();
 
-    // ── 1. Query GitHub Releases API ─────────────────────────────────────────
-    let http = match build_client() {
-        Some(c) => c,
-        None => {
-            eprintln!("[fm_update] failed to build HTTP client");
-            return local_tag;
-        }
-    };
+    let http = build_client()?;
 
     let resp = match http.get(RELEASES_API).send() {
         Ok(r) => r,
-        Err(e) => {
-            eprintln!("[fm_update] API request failed: {e}");
-            return local_tag;
-        }
+        Err(e) => { eprintln!("[fm_update] API request failed: {e}"); return None; }
     };
 
     let json: serde_json::Value = match resp.json() {
         Ok(j) => j,
-        Err(e) => {
-            eprintln!("[fm_update] API response parse error: {e}");
-            return local_tag;
-        }
+        Err(e) => { eprintln!("[fm_update] API response parse error: {e}"); return None; }
     };
 
-    let remote_tag = match json["tag_name"].as_str() {
-        Some(t) => t.to_string(),
-        None => {
-            eprintln!("[fm_update] no tag_name in GitHub response");
-            return local_tag;
-        }
-    };
+    let remote_tag = json["tag_name"].as_str()?.to_string();
 
-    // ── 2. Version comparison ─────────────────────────────────────────────────
-    match (parse_quad(&local_tag), parse_quad(&remote_tag)) {
-        (Some(l), Some(r)) if r <= l => {
+    // Already up to date?
+    if let (Some(l), Some(r)) = (parse_quad(&local_tag), parse_quad(&remote_tag)) {
+        if r <= l {
             eprintln!("[fm_update] FM is up to date ({local_tag})");
-            return local_tag;
-        }
-        (None, _) if local_tag.is_empty() => {
-            eprintln!("[fm_update] no local FM version; downloading {remote_tag}");
-        }
-        _ => {
-            eprintln!("[fm_update] FM update available: {local_tag} → {remote_tag}");
+            return None;
         }
     }
 
-    // ── 3. Find the zip asset ─────────────────────────────────────────────────
-    let download_url = match json["assets"]
+    let download_url = json["assets"]
         .as_array()
         .and_then(|arr| {
             arr.iter().find(|a| {
@@ -151,26 +127,67 @@ pub fn check_and_update_fm(fm_base: &Path) -> String {
             })
         })
         .and_then(|a| a["browser_download_url"].as_str())
-    {
-        Some(u) => u.to_string(),
-        None => {
-            eprintln!("[fm_update] no zip asset in release {remote_tag}");
-            return local_tag;
-        }
-    };
+        .map(|s| s.to_string())?;
 
-    // ── 4. Download ───────────────────────────────────────────────────────────
+    eprintln!("[fm_update] update available: {local_tag:?} → {remote_tag}");
+    Some((remote_tag, download_url))
+}
+
+/// Download and extract an FM update that was previously located by
+/// [`check_fm_update_available`].
+///
+/// `progress_cb` is called with values in `0.0..=1.0`:
+/// - `0.0..0.9` — download progress
+/// - `0.9..=1.0` — extract + cleanup progress
+///
+/// Returns the new version tag on success, or an error message on failure.
+/// All network / IO errors are returned as `Err(String)` (non-fatal to caller).
+pub fn install_fm_update(
+    fm_base: &Path,
+    remote_tag: &str,
+    download_url: &str,
+    progress_cb: impl Fn(f32),
+) -> Result<String, String> {
+    let local_tag = read_fm_version_tag(fm_base).unwrap_or_default();
+
+    let http = build_client()
+        .ok_or_else(|| "failed to build HTTP client".to_string())?;
+
+    // ── 1. Streaming download with progress ───────────────────────────────────
+    progress_cb(0.0);
     eprintln!("[fm_update] downloading {download_url}");
-    let zip_bytes = match http.get(&download_url).send().and_then(|r| r.bytes()) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("[fm_update] download failed: {e}");
-            return local_tag;
-        }
-    };
-    eprintln!("[fm_update] downloaded {} bytes", zip_bytes.len());
 
-    // ── 5. Back up existing data ──────────────────────────────────────────────
+    let resp = http
+        .get(download_url)
+        .send()
+        .map_err(|e| format!("download request failed: {e}"))?;
+
+    let content_length = resp.content_length().unwrap_or(0);
+    let mut zip_bytes: Vec<u8> = if content_length > 0 {
+        Vec::with_capacity(content_length as usize)
+    } else {
+        Vec::new()
+    };
+
+    {
+        let mut reader = resp;
+        let mut chunk = [0u8; 65536];
+        loop {
+            let n = reader
+                .read(&mut chunk)
+                .map_err(|e| format!("download read error: {e}"))?;
+            if n == 0 { break; }
+            zip_bytes.extend_from_slice(&chunk[..n]);
+            if content_length > 0 {
+                let frac = (zip_bytes.len() as f64 / content_length as f64 * 0.9) as f32;
+                progress_cb(frac.min(0.89));
+            }
+        }
+    }
+    eprintln!("[fm_update] downloaded {} bytes", zip_bytes.len());
+    progress_cb(0.9);
+
+    // ── 2. Back up existing data ──────────────────────────────────────────────
     if !local_tag.is_empty() && fm_base.join("version_tag").exists() {
         let backup_dir = fm_base.join(&local_tag);
         match std::fs::create_dir_all(&backup_dir) {
@@ -190,26 +207,21 @@ pub fn check_and_update_fm(fm_base: &Path) -> String {
         }
     }
 
-    // ── 6. Extract zip into fm_base ───────────────────────────────────────────
-    let cursor = std::io::Cursor::new(zip_bytes.as_ref());
-    let mut archive = match zip::ZipArchive::new(cursor) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("[fm_update] zip open error: {e}");
-            return local_tag;
-        }
-    };
+    // ── 3. Extract zip into fm_base ───────────────────────────────────────────
+    let cursor = std::io::Cursor::new(zip_bytes.as_slice());
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("zip open error: {e}"))?;
 
+    let total = archive.len().max(1) as f32;
     for i in 0..archive.len() {
         let mut zf = match archive.by_index(i) {
             Ok(f) => f,
             Err(e) => { eprintln!("[fm_update] zip entry {i} error: {e}"); continue; }
         };
 
-        // Sanitise: strip any leading `./` or absolute prefix.
         let rel = zf.name().trim_start_matches("./").to_string();
         if rel.is_empty() || rel.starts_with('/') || rel.contains("..") {
-            continue; // skip suspicious paths
+            continue;
         }
 
         let out_path = fm_base.join(&rel);
@@ -241,12 +253,15 @@ pub fn check_and_update_fm(fm_base: &Path) -> String {
         if let Err(e) = std::io::Write::write_all(&mut out_file, &buf) {
             eprintln!("[fm_update] write {}: {e}", out_path.display());
         }
+
+        // 0.9 → 1.0 over extraction
+        let extract_frac = 0.9 + (i as f32 + 1.0) / total * 0.1;
+        progress_cb(extract_frac.min(0.99));
     }
 
     eprintln!("[fm_update] FM updated to {remote_tag}");
 
-    // ── 7. Remove the backup dir now that the update succeeded ────────────────
-    // Also prune any older version-tagged backup dirs left by previous updates.
+    // ── 4. Remove stale backup dirs ───────────────────────────────────────────
     if let Ok(entries) = std::fs::read_dir(fm_base) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -262,7 +277,33 @@ pub fn check_and_update_fm(fm_base: &Path) -> String {
         }
     }
 
-    remote_tag
+    progress_cb(1.0);
+    Ok(remote_tag.to_string())
+}
+
+/// Convenience wrapper: check for an FM update and, if one is available,
+/// silently download and install it.
+///
+/// Used by the GDI path (no settings UI) and by `[check_setup_needs]`-driven
+/// first-run downloads.  The GPU path uses [`check_fm_update_available`] +
+/// [`install_fm_update`] separately so the user can confirm before downloading.
+///
+/// Returns the current (possibly just-updated) version tag string.
+pub fn check_and_update_fm(fm_base: &Path) -> String {
+    let local_tag = read_fm_version_tag(fm_base).unwrap_or_default();
+
+    match check_fm_update_available(fm_base) {
+        None => local_tag,
+        Some((remote_tag, download_url)) => {
+            match install_fm_update(fm_base, &remote_tag, &download_url, |_| {}) {
+                Ok(tag) => tag,
+                Err(e) => {
+                    eprintln!("[fm_update] install failed: {e}");
+                    local_tag
+                }
+            }
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

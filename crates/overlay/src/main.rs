@@ -170,6 +170,12 @@ struct GpuApp {
     /// Arc<Mutex> so the background fm-update thread can write a fresh tag
     /// after a deferred update completes.
     fm_version_tag: Arc<std::sync::Mutex<String>>,
+    /// Pending FM update discovered by the background check thread.
+    /// `Some((remote_tag, download_url))` when an update is available and the
+    /// user has not yet chosen to install it; `None` otherwise.
+    pending_fm_update: Arc<std::sync::Mutex<Option<(String, String)>>>,
+    /// Install progress 0.0..=1.0 while an FM install is in progress, else None.
+    fm_install_progress: Arc<std::sync::Mutex<Option<f32>>>,
     /// Whether War Thunder is currently the foreground window.
     wt_foreground: Arc<std::sync::atomic::AtomicBool>,
     /// Whether the BYOH settings window is focused.
@@ -211,6 +217,8 @@ impl GpuApp {
         shared_gen: SharedGen,
         window_defs: Vec<WindowDef>,
         fm_version_tag: String,
+        pending_fm_update: Arc<std::sync::Mutex<Option<(String, String)>>>,
+        fm_install_progress: Arc<std::sync::Mutex<Option<f32>>>,
         wt_foreground: Arc<std::sync::atomic::AtomicBool>,
         mission_running: Arc<std::sync::atomic::AtomicBool>,
         app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
@@ -236,6 +244,8 @@ impl GpuApp {
             last_blink: false,
             settings_win: None,
             fm_version_tag,
+            pending_fm_update,
+            fm_install_progress,
             wt_foreground,
             byoh_foreground: false,
             mission_running,
@@ -278,18 +288,20 @@ impl GpuApp {
     fn create_overlay_windows(&mut self, event_loop: &ActiveEventLoop) {
         if !self.windows.is_empty() { return; }
 
-        // If the FM update was deferred because setup was pending, kick it off
-        // now in a background thread so it doesn't block the UI.
+        // If the FM update check was deferred because setup was pending, kick
+        // it off now in a background thread.  The thread writes to
+        // `pending_fm_update` so the settings window can prompt the user.
         if self.fm_update_deferred {
             self.fm_update_deferred = false;
             let fm_base = core_client::fm_base_dir();
-            let tag_arc = self.fm_version_tag.clone();
+            let pending_arc = self.pending_fm_update.clone();
             std::thread::Builder::new()
-                .name("fm-update".to_string())
+                .name("fm-check".to_string())
                 .spawn(move || {
-                    let new_tag = core_client::check_and_update_fm(&fm_base);
-                    if let Ok(mut lock) = tag_arc.lock() {
-                        *lock = new_tag;
+                    if let Some(update) = core_client::check_fm_update_available(&fm_base) {
+                        if let Ok(mut lock) = pending_arc.lock() {
+                            *lock = Some(update);
+                        }
                     }
                 })
                 .ok();
@@ -398,6 +410,8 @@ impl GpuApp {
                     &self.instance,
                     ctx,
                     self.fm_version_tag.clone(),
+                    self.pending_fm_update.clone(),
+                    self.fm_install_progress.clone(),
                     self.app_config.clone(),
                     self.reload_requested.clone(),
                     self.reload_error.clone(),
@@ -790,12 +804,37 @@ fn run_gpu_mode() {
         Arc::new(std::sync::Mutex::new(None));
 
     // Build the client on the main thread so we can read fm_version_tag before
-    // handing the client off to the poller thread.
-    let client = match Client::new_with_windows(window_defs.clone(), None, setup_needs.any()) {
+    // handing the client off to the poller thread.  Always skip the inline
+    // FM update — the GPU path uses an opt-in background check instead.
+    let client = match Client::new_with_windows(window_defs.clone(), None, true) {
         Ok(c) => c,
         Err(e) => { eprintln!("[gpu] client init failed: {e}"); return; }
     };
     let fm_tag = client.fm_version_tag.clone();
+
+    // Shared arcs for opt-in FM update UI.
+    let pending_fm_update: Arc<std::sync::Mutex<Option<(String, String)>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let fm_install_progress: Arc<std::sync::Mutex<Option<f32>>> =
+        Arc::new(std::sync::Mutex::new(None));
+
+    // If no setup wizard will run, kick off the update check immediately in a
+    // background thread.  Otherwise, GpuApp defers the check until after the
+    // wizard completes (see `create_overlay_windows`).
+    if !setup_needs.any() {
+        let fm_base = core_client::fm_base_dir();
+        let pending_arc = pending_fm_update.clone();
+        std::thread::Builder::new()
+            .name("fm-check".to_string())
+            .spawn(move || {
+                if let Some(update) = core_client::check_fm_update_available(&fm_base) {
+                    if let Ok(mut lock) = pending_arc.lock() {
+                        *lock = Some(update);
+                    }
+                }
+            })
+            .ok();
+    }
 
     {
         let shared          = shared.clone();
@@ -867,16 +906,18 @@ fn run_gpu_mode() {
             shared_gen,
             window_defs,
             fm_tag,
+            pending_fm_update,
+            fm_install_progress,
             wt_foreground,
             mission_running,
             app_config,
             reload_requested,
-        reload_error,
-        pending_window_defs,
-        indicators_path,
-        Some(setup_needs),
-    ))
-    .expect("run app");
+            reload_error,
+            pending_window_defs,
+            indicators_path,
+            Some(setup_needs),
+        ))
+        .expect("run app");
 }
 
 // ─── Console management (Windows) ────────────────────────────────────────────

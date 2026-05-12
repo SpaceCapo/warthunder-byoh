@@ -38,6 +38,11 @@ pub struct SettingsWindow {
     /// Wrapped in Arc<Mutex> so the background FM-update thread can write a
     /// fresh tag after the deferred update completes.
     fm_version_tag: Arc<Mutex<String>>,
+    /// Pending FM update found by the background check thread.
+    /// `Some((remote_tag, download_url))` when an update is available.
+    pending_fm_update: Arc<Mutex<Option<(String, String)>>>,
+    /// Install progress 0.0..=1.0 while an FM install is running, else None.
+    fm_install_progress: Arc<Mutex<Option<f32>>>,
     /// Active tab.
     active_tab: SettingsTab,
     /// Shared application config (read/written by the Settings tab).
@@ -62,6 +67,8 @@ impl SettingsWindow {
         instance: &wgpu::Instance,
         ctx: &GpuContext,
         fm_version_tag: Arc<Mutex<String>>,
+        pending_fm_update: Arc<Mutex<Option<(String, String)>>>,
+        fm_install_progress: Arc<Mutex<Option<f32>>>,
         app_config: Arc<RwLock<core_client::AppConfig>>,
         reload_requested: Arc<AtomicBool>,
         reload_error: Arc<Mutex<Option<String>>>,
@@ -75,7 +82,7 @@ impl SettingsWindow {
             .with_title("War Thunder BYOH")
             .with_decorations(true)
             .with_resizable(false)
-            .with_inner_size(winit::dpi::LogicalSize::new(420u32, 260u32));
+            .with_inner_size(winit::dpi::LogicalSize::new(420u32, 290u32));
         if let Some(pos) = hint_pos {
             attrs = attrs.with_position(pos);
         }
@@ -126,6 +133,8 @@ impl SettingsWindow {
             show_about: false,
             exit_requested: false,
             fm_version_tag,
+            pending_fm_update,
+            fm_install_progress,
             active_tab: SettingsTab::Main,
             app_config,
             reload_requested,
@@ -196,12 +205,27 @@ impl SettingsWindow {
             .map(|g| g.clone())
             .unwrap_or_default();
 
+        // Snapshot FM update state.
+        let pending_update_snap = self.pending_fm_update
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or(None);
+        let install_progress_snap = self.fm_install_progress
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(None);
+
+        let mut install_triggered = false;
+
         let full_output = self.egui_ctx.run(raw_input, |ui_ctx| {
             build_ui(
                 ui_ctx,
                 &mut show_about,
                 &mut exit_requested,
                 &fm_version_tag_snap,
+                pending_update_snap.as_ref().map(|(t, _)| t.as_str()),
+                install_progress_snap,
+                &mut install_triggered,
                 &mut active_tab,
                 &mut config,
                 &mut config_changed,
@@ -211,6 +235,39 @@ impl SettingsWindow {
                 &fm_dir,
             );
         });
+
+        // Spawn the install thread when the user clicked Install.
+        if install_triggered {
+            if let Some((remote_tag, download_url)) = pending_update_snap {
+                let progress_arc = self.fm_install_progress.clone();
+                let tag_arc = self.fm_version_tag.clone();
+                let pending_arc = self.pending_fm_update.clone();
+                let fm_base = core_client::fm_base_dir();
+                std::thread::Builder::new()
+                    .name("fm-install".to_string())
+                    .spawn(move || {
+                        let result = core_client::install_fm_update(
+                            &fm_base,
+                            &remote_tag,
+                            &download_url,
+                            |p| {
+                                if let Ok(mut lock) = progress_arc.lock() {
+                                    *lock = Some(p);
+                                }
+                            },
+                        );
+                        match result {
+                            Ok(new_tag) => {
+                                if let Ok(mut lock) = tag_arc.lock() { *lock = new_tag; }
+                                if let Ok(mut lock) = pending_arc.lock() { *lock = None; }
+                            }
+                            Err(e) => eprintln!("[fm_update] install error: {e}"),
+                        }
+                        if let Ok(mut lock) = progress_arc.lock() { *lock = None; }
+                    })
+                    .ok();
+            }
+        }
 
         // Write config changes back and persist to disk.
         if config_changed {
@@ -281,6 +338,12 @@ fn build_ui(
     show_about: &mut bool,
     exit_requested: &mut bool,
     fm_version_tag: &str,
+    // Remote tag when an FM update is available, `None` otherwise.
+    pending_update_tag: Option<&str>,
+    // Install progress 0.0..=1.0 while installing, else `None`.
+    install_progress: Option<f32>,
+    // Set to `true` when the user clicks the Install button.
+    install_triggered: &mut bool,
     active_tab: &mut SettingsTab,
     config: &mut core_client::AppConfig,
     config_changed: &mut bool,
@@ -338,6 +401,33 @@ fn build_ui(
                                 .color(egui::Color32::from_rgb(160, 160, 160)),
                         );
                     }
+
+                    // FM update prompt / progress bar
+                    if let Some(p) = install_progress {
+                        ui.add_space(6.0);
+                        let pct = (p * 100.0) as u32;
+                        ui.add(
+                            egui::ProgressBar::new(p)
+                                .text(format!("Installing FM update... {pct}%"))
+                                .animate(true),
+                        );
+                    } else if let Some(remote_tag) = pending_update_tag {
+                        ui.add_space(6.0);
+                        let arrow = if fm_version_tag.is_empty() {
+                            format!("FM update available: {remote_tag}")
+                        } else {
+                            format!("FM update available: {fm_version_tag} → {remote_tag}")
+                        };
+                        ui.label(
+                            egui::RichText::new(arrow)
+                                .color(egui::Color32::from_rgb(255, 220, 80)),
+                        );
+                        ui.add_space(4.0);
+                        if ui.button("  Install FM update  ").clicked() {
+                            *install_triggered = true;
+                        }
+                    }
+
                     ui.add_space(8.0);
                     ui.separator();
                     ui.add_space(6.0);
