@@ -27,16 +27,16 @@ pub use windows_impl::*;
 #[cfg(feature = "windows-glue")]
 mod windows_impl {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::{BOOL, COLORREF, HANDLE, HWND, POINT, SIZE};
+    use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, POINT, SIZE};
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
         SelectObject, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS, HGDIOBJ,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, HWND_TOPMOST,
-        SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, UpdateLayeredWindow, ULW_ALPHA, WS_EX_APPWINDOW,
-        WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-        GetWindowThreadProcessId,
+        GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, GWLP_HWNDPARENT,
+        HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+        UpdateLayeredWindow, ULW_ALPHA, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+        WS_EX_TRANSPARENT, GetWindowThreadProcessId,
     };
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -66,6 +66,10 @@ mod windows_impl {
     /// Set `WS_EX_APPWINDOW` and clear `WS_EX_TOOLWINDOW` so the window is
     /// pinned into the per-monitor taskbar and its button follows the window
     /// as it is dragged between monitors.
+    ///
+    /// Also clears any implicit owner (`GWLP_HWNDPARENT = 0`) and flushes the
+    /// style change to the shell via `SWP_FRAMECHANGED`, which is required for
+    /// the taskbar to update its button for the window.
     pub fn pin_to_taskbar(window: &winit::window::Window) {
         let Some(hwnd) = get_hwnd(window) else { return };
         unsafe {
@@ -73,6 +77,14 @@ mod windows_impl {
             let new_ex = (ex | WS_EX_APPWINDOW.0 as isize)
                        & !(WS_EX_TOOLWINDOW.0 as isize);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+            // Remove any implicit owner that would prevent per-monitor taskbar tracking.
+            SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0);
+            // SWP_FRAMECHANGED flushes SetWindowLongPtr changes to the shell
+            // so the taskbar button appears/updates immediately.
+            let _ = SetWindowPos(
+                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+            );
         }
     }
 
@@ -204,6 +216,10 @@ mod windows_impl {
 pub fn setup_gpu_window(_window: &winit::window::Window) {
     // Wayland / X11 / macOS: winit + wgpu handle transparency natively.
 }
+
+/// No-op on non-Windows: taskbar pinning is a Windows-only concept.
+#[cfg(not(feature = "windows-glue"))]
+pub fn pin_to_taskbar(_window: &winit::window::Window) {}
 
 /// Hide the overlay window from the taskbar / dock window list.
 ///

@@ -174,16 +174,12 @@ DEPLOY_DIR := $(if $(strip $(WT_BYOH_DEPLOY_DIR)),$(strip $(WT_BYOH_DEPLOY_DIR))
 
 windows-deploy: windows-pkg fetch-fm
 	@echo "Deploying Windows build to $(DEPLOY_DIR)..."
-	@mkdir -p $(DEPLOY_DIR)/fm/fm
+	@mkdir -p "$(DEPLOY_DIR)/fm"
 	cp -v  $(RELEASE_DIR)/windows/$(BIN).exe     $(DEPLOY_DIR)/$(BIN).exe
 	cp -v  $(RELEASE_DIR)/windows/$(BIN)-gdi.exe $(DEPLOY_DIR)/$(BIN)-gdi.exe
 	cp -v  ./data/fields.json 					 $(DEPLOY_DIR)/
 	cp -v  ./data/indicators.json.example		 $(DEPLOY_DIR)/
-	cp -vr $(FM_DIR)                     		 $(DEPLOY_DIR)/
-# 	cp -v $(FM_DIR)/fm/fm_names_db.csv  $(DEPLOY_DIR)/fm/fm/
-# 	cp -v $(FM_DIR)/fm/fm_data_db.csv   $(DEPLOY_DIR)/fm/fm/
-# 	cp -v $(FM_DIR)/fm/fm_version       $(DEPLOY_DIR)/fm/fm/
-# 	cp -v data/fm/current_version    $(DEPLOY_DIR)/fm/
+	cp -r  "data/fm/."                           "$(DEPLOY_DIR)/fm/"
 
 gpu-deploy: windows-deploy
 
