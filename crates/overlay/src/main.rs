@@ -731,6 +731,21 @@ impl ApplicationHandler for GpuApp {
         let focus_changed = should_show != self.overlays_visible;
         if focus_changed {
             self.overlays_visible = should_show;
+            // On macOS the overlay window physically stays at level 1000 even
+            // when its content is transparent, which blocks mouse input for
+            // everything beneath it.  Sync level and ignore-mouse-events with
+            // the visibility state so the window is truly out of the way when
+            // the overlay is hidden.
+            #[cfg(target_os = "macos")]
+            {
+                // When hidden: level -1 (below normal windows) + always click-through.
+                // When shown:  level 1000 + restore the user's click-through preference.
+                let ct = !should_show || self.click_through;
+                for ws in self.windows.values() {
+                    platform::set_overlay_level(&ws.window, should_show);
+                    platform::set_click_through(&ws.window, ct);
+                }
+            }
         }
 
         // Redraw whenever data/blink changes or the show/hide state transitions.

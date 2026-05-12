@@ -395,6 +395,54 @@ pub fn set_click_through(window: &winit::window::Window, click_through: bool) {
     let _ = (window, click_through);
 }
 
+/// Adjust the macOS window level to match the overlay's active/hidden state.
+///
+/// - `active = true`  → `NSScreenSaverWindowLevel` (1000): floats above the game.
+/// - `active = false` → level -1: sinks below all normal application windows so
+///   the window neither blocks mouse input nor appears in Mission Control when
+///   the overlay is hidden.
+///
+/// No-op on non-macOS platforms (Windows uses pixel transparency instead;
+/// Linux does not yet have an equivalent mechanism).
+#[cfg(not(feature = "windows-glue"))]
+pub fn set_overlay_level(window: &winit::window::Window, active: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::AppKit(h) = handle.as_raw() {
+                unsafe {
+                    extern "C" {
+                        fn sel_registerName(name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+                        fn objc_msgSend();
+                    }
+                    #[allow(non_camel_case_types)]
+                    type objc_msgSend_ptr_fn =
+                        unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void) -> *mut std::ffi::c_void;
+                    #[allow(non_camel_case_types)]
+                    type objc_msgSend_i64_fn =
+                        unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, i64);
+
+                    let send_ptr: objc_msgSend_ptr_fn = std::mem::transmute(objc_msgSend as *const ());
+                    let send_i64: objc_msgSend_i64_fn = std::mem::transmute(objc_msgSend as *const ());
+
+                    let sel_window = sel_registerName(b"window\0".as_ptr() as *const std::ffi::c_char);
+                    let ns_window = send_ptr(h.ns_view.as_ptr() as *mut std::ffi::c_void, sel_window);
+                    if ns_window.is_null() { return; }
+
+                    // NSScreenSaverWindowLevel (1000) when active, -1 (below all normal
+                    // windows) when hidden.
+                    let level: i64 = if active { 1000 } else { -1 };
+                    let sel_level = sel_registerName(b"setLevel:\0".as_ptr() as *const std::ffi::c_char);
+                    send_i64(ns_window, sel_level, level);
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, active);
+}
+
 /// On non-Windows platforms there is no War Thunder foreground check;
 /// always return `true` so overlay windows are visible.
 #[cfg(not(feature = "windows-glue"))]
@@ -485,8 +533,11 @@ mod linux {
 
     fn is_warthunder_name(name: &str) -> bool {
         let low = name.to_lowercase();
+        // Use exact / prefix matches so that "warthunder-byoh" (this tool)
+        // and other apps that happen to contain "warthunder" in their name
+        // are not misidentified as the game.
         low == "aces" || low.starts_with("aces.")
-            || low.contains("warthunder")
+            || low == "warthunder" || low == "war thunder"
     }
 }
 
@@ -546,7 +597,9 @@ mod macos {
     }
 
     fn is_warthunder_name(name: &str) -> bool {
+        // Use exact / prefix matches so that "warthunder-byoh" (this tool)
+        // is not misidentified as the game.
         name == "aces" || name.starts_with("aces.")
-            || name.contains("warthunder")
+            || name == "warthunder" || name == "war thunder"
     }
 }
