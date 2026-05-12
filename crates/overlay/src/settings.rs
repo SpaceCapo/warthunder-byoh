@@ -82,6 +82,11 @@ impl SettingsWindow {
             .with_title("War Thunder BYOH")
             .with_decorations(true)
             .with_resizable(false)
+            // Start hidden so callers can apply platform window-style changes
+            // (WS_EX_APPWINDOW, owner clearing) before the Shell first sees the
+            // window.  The shell registers a taskbar entry on SW_SHOW, so any
+            // style fix applied while hidden takes effect cleanly on first show.
+            .with_visible(false)
             .with_inner_size(winit::dpi::LogicalSize::new(420u32, 290u32));
         if let Some(pos) = hint_pos {
             attrs = attrs.with_position(pos);
