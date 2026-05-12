@@ -4,9 +4,9 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>WT BYOH</string>
+  <string>War Thunder BYOH</string>
   <key>CFBundleDisplayName</key>
-  <string>WT BYOH</string>
+  <string>War Thunder BYOH</string>
   <key>CFBundleIdentifier</key>
   <string>com.warthunder.byoh</string>
   <key>CFBundleVersion</key>

@@ -194,14 +194,19 @@ MACOS_TARGET_VOL := wt-macos-target
 macos:
 	@echo "Building macOS builder image..."
 	docker build -t wt-macos-builder:latest docker/macos
-	@echo "Building macOS (x86_64-apple-darwin) using wt-macos-builder image..."
+	@echo "Building macOS universal binary (x86_64 + aarch64) using wt-macos-builder image..."
 	docker run --rm -v "$(PWD)":/work -w /work \
 	  -v $(CARGO_REG_VOL):/cargo-reg -e CARGO_HOME=/cargo-reg \
 	  -v $(MACOS_TARGET_VOL):/work/target \
+	  -e GIT_VERSION="$(GIT_VERSION)" \
 	  wt-macos-builder:latest bash -lc \
 	  "cargo build --features render,gpu --release --target x86_64-apple-darwin -p $(PROJECT) \
+	   && cargo build --features render,gpu --release --target aarch64-apple-darwin -p $(PROJECT) \
 	   && mkdir -p $(RELEASE_DIR)/macos \
-	   && cp target/x86_64-apple-darwin/release/$(BIN) $(RELEASE_DIR)/macos/$(BIN) \
+	   && lipo -create \
+	        target/x86_64-apple-darwin/release/$(BIN) \
+	        target/aarch64-apple-darwin/release/$(BIN) \
+	        -output $(RELEASE_DIR)/macos/$(BIN) \
 	   && chown -R $$(id -u):$$(id -g) $(RELEASE_DIR)/macos 2>/dev/null || true"
 	@# Fall back to host chown if the in-container chown didn't cover it.
 	@chown -R "$(shell id -u):$(shell id -g)" "$(RELEASE_DIR)/macos" 2>/dev/null || true
