@@ -388,6 +388,11 @@ impl GpuApp {
         // Create (or recreate) the settings window.
         if self.settings_win.is_none() {
             if let Some(ctx) = self.ctx.as_ref() {
+                // Use the first overlay window's position as a hint so the
+                // settings window opens on the same monitor as the game — this
+                // ensures it appears in the correct per-monitor taskbar.
+                let hint_pos = self.window_defs.first()
+                    .map(|wd| LogicalPosition::new(wd.x, wd.y));
                 self.settings_win = settings::SettingsWindow::new(
                     event_loop,
                     &self.instance,
@@ -398,9 +403,13 @@ impl GpuApp {
                     self.reload_error.clone(),
                     core_client::config_dir(),
                     core_client::fm_dir(),
+                    hint_pos,
                 );
                 if let Some(sw) = self.settings_win.as_ref() {
                     sw.window.set_window_icon(app_icon());
+                    // Explicitly set WS_EX_APPWINDOW so the taskbar button is
+                    // owned by this window and follows it across monitors.
+                    platform::pin_to_taskbar(&sw.window);
                 } else {
                     eprintln!("[gpu] failed to create settings window");
                 }
@@ -1715,6 +1724,7 @@ mod win32 {
 mod win32 {
     pub fn get_hwnd(_: &winit::window::Window) -> Option<()> { None }
     pub fn make_layered(_: &winit::window::Window) {}
+    pub fn pin_to_taskbar(_: &winit::window::Window) {}
     pub fn set_click_through(_: &winit::window::Window, _: bool) {}
     pub fn is_warthunder_foreground() -> bool { true }
 }
