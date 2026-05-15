@@ -1572,7 +1572,10 @@ pub struct Client {
     fields: Vec<FieldDef>,
     windows: Mutex<Vec<(WindowDef, Calculator)>>,
     mode: FetchMode,
-    fm_db: Arc<FmDb>,
+    /// FM database — wrapped in `Arc<RwLock<…>>` so the poller thread can
+    /// hot-swap it after an install or first-run download without rebuilding
+    /// the `Client` or stopping background fetch threads.
+    fm_db: Arc<RwLock<FmDb>>,
     derived: Mutex<DerivedState>,
     /// FM database release tag currently loaded, e.g. `"v2.55.1.88"`.
     /// Empty string if no FM data is present.
@@ -1694,7 +1697,7 @@ impl Client {
         } else {
             check_and_update_fm(&fm_base)
         };
-        let fm_db = Arc::new(load_fm_db(None));
+        let fm_db = Arc::new(RwLock::new(load_fm_db(None)));
 
         Ok(Self {
             fields,
@@ -1748,7 +1751,7 @@ impl Client {
                 failure_backoff: Duration::from_secs(5),
                 retry_limit: 0,
             },
-            fm_db: Arc::new(FmDb::new()),
+            fm_db: Arc::new(RwLock::new(FmDb::new())),
             derived: Mutex::new(DerivedState::new()),
             fm_version_tag: String::new(),
         }
@@ -1857,12 +1860,14 @@ impl Client {
                 if let Some(indicators_json) = cache.get("indicators").or_else(|| cache.get("/indicators")) {
                     if let Some(vehicle) = indicators_json.get("type").and_then(|v| v.as_str()) {
                         vehicle_name = Some(vehicle.to_string());
-                        if let Some(rec) = self.fm_db.get(vehicle) {
+                        let maybe_rec = self.fm_db.read().ok()
+                            .and_then(|g| g.get(vehicle).cloned());
+                        if let Some(rec) = maybe_rec {
                             fm_found = true;
-                            inject_fm_fields(&mut frame, rec);
+                            inject_fm_fields(&mut frame, &rec);
                             // Compute dynamic flaps speed limit based on current extension
                             if let Some(flaps_pct) = frame.get("flaps_pct").copied() {
-                                if let Some(spd) = compute_named_flaps_current(flaps_pct, rec) {
+                                if let Some(spd) = compute_named_flaps_current(flaps_pct, &rec) {
                                     frame.insert("fm_crit_flaps_current".into(), spd);
                                 }
                             }
@@ -1888,11 +1893,13 @@ impl Client {
                 if let Ok(indicators_json) = self.fetch_json("indicators").or_else(|_| self.fetch_json("/indicators")) {
                     if let Some(vehicle) = indicators_json.get("type").and_then(|v| v.as_str()) {
                         vehicle_name = Some(vehicle.to_string());
-                        if let Some(rec) = self.fm_db.get(vehicle) {
+                        let maybe_rec = self.fm_db.read().ok()
+                            .and_then(|g| g.get(vehicle).cloned());
+                        if let Some(rec) = maybe_rec {
                             fm_found = true;
-                            inject_fm_fields(&mut frame, rec);
+                            inject_fm_fields(&mut frame, &rec);
                             if let Some(flaps_pct) = frame.get("flaps_pct").copied() {
-                                if let Some(spd) = compute_named_flaps_current(flaps_pct, rec) {
+                                if let Some(spd) = compute_named_flaps_current(flaps_pct, &rec) {
                                     frame.insert("fm_crit_flaps_current".into(), spd);
                                 }
                             }
@@ -2002,6 +2009,23 @@ impl Client {
             *lock = new_windows;
         }
         Ok(new_defs)
+    }
+
+    /// Reload the FM database from disk in-place.
+    ///
+    /// Reads the CSV files from `fm_dir()`, swaps them into the shared
+    /// `RwLock<FmDb>`, and returns the new version tag string.
+    ///
+    /// Called by the poller thread after:
+    /// - the user installs an FM update via the Settings window, or
+    /// - the setup wizard downloads the FM database for the first time.
+    pub fn reload_fm_db(&self) -> String {
+        let new_db = load_fm_db(None);
+        if let Ok(mut lock) = self.fm_db.write() {
+            *lock = new_db;
+        }
+        let fm_base = fm_base_dir();
+        read_fm_version_tag(&fm_base).unwrap_or_default()
     }
 }
 

@@ -43,6 +43,9 @@ pub struct SettingsWindow {
     pending_fm_update: Arc<Mutex<Option<(String, String)>>>,
     /// Install progress 0.0..=1.0 while an FM install is running, else None.
     fm_install_progress: Arc<Mutex<Option<f32>>>,
+    /// Set to `true` by the install thread after a successful FM install so
+    /// the poller thread knows to call `Client::reload_fm_db`.
+    fm_reload_needed: Arc<AtomicBool>,
     /// Active tab.
     active_tab: SettingsTab,
     /// Shared application config (read/written by the Settings tab).
@@ -69,6 +72,7 @@ impl SettingsWindow {
         fm_version_tag: Arc<Mutex<String>>,
         pending_fm_update: Arc<Mutex<Option<(String, String)>>>,
         fm_install_progress: Arc<Mutex<Option<f32>>>,
+        fm_reload_needed: Arc<AtomicBool>,
         app_config: Arc<RwLock<core_client::AppConfig>>,
         reload_requested: Arc<AtomicBool>,
         reload_error: Arc<Mutex<Option<String>>>,
@@ -140,6 +144,7 @@ impl SettingsWindow {
             fm_version_tag,
             pending_fm_update,
             fm_install_progress,
+            fm_reload_needed,
             active_tab: SettingsTab::Main,
             app_config,
             reload_requested,
@@ -247,6 +252,7 @@ impl SettingsWindow {
                 let progress_arc = self.fm_install_progress.clone();
                 let tag_arc = self.fm_version_tag.clone();
                 let pending_arc = self.pending_fm_update.clone();
+                let fm_reload = self.fm_reload_needed.clone();
                 let fm_base = core_client::fm_base_dir();
                 std::thread::Builder::new()
                     .name("fm-install".to_string())
@@ -265,6 +271,9 @@ impl SettingsWindow {
                             Ok(new_tag) => {
                                 if let Ok(mut lock) = tag_arc.lock() { *lock = new_tag; }
                                 if let Ok(mut lock) = pending_arc.lock() { *lock = None; }
+                                // Signal the poller thread to hot-swap the in-memory
+                                // FmDb so overlay labels update without a restart.
+                                fm_reload.store(true, Ordering::Relaxed);
                             }
                             Err(e) => eprintln!("[fm_update] install error: {e}"),
                         }
