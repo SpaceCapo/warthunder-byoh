@@ -401,6 +401,20 @@ impl GpuApp {
             platform::hide_from_taskbar(&ws.window);
         }
 
+        // macOS: the window position is constrained to be below the menu bar at
+        // creation time because the window starts at NSFloatingWindowLevel.
+        // hide_from_taskbar() just raised it to NSScreenSaverWindowLevel (1000),
+        // which is exempt from that constraint.  Re-apply the configured position
+        // now so that values such as y=3 (overlapping the menu bar) are respected.
+        #[cfg(target_os = "macos")]
+        for ws in self.windows.values() {
+            if let Some(wd) = self.window_defs.get(ws.idx) {
+                ws.window.set_outer_position(
+                    winit::dpi::LogicalPosition::new(wd.x as f64, wd.y as f64),
+                );
+            }
+        }
+
         // Create (or recreate) the settings window.
         if self.settings_win.is_none() {
             if let Some(ctx) = self.ctx.as_ref() {
