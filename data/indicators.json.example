@@ -67,6 +67,16 @@
                 "crit_above": 80
             },
             {
+                "id": "crit_air_spd",
+                "label": "CIAS",
+                "unit": "%",
+                "formula": "ias_kmh / fm_crit_ias * 100",
+                "format": "integer",
+                "warn_above": 75.0,
+                "crit_above": 90.0,
+                "show_when": "valid"
+            },
+            {
                 "id": "gear_spd_pct",
                 "label": "GSPD",
                 "unit": "%",
