@@ -25,18 +25,18 @@ The project is a Rust workspace (`Cargo.toml`) with three crates plus Python too
 
 ```
 crates/
-  core_client/   ← Rust library: War Thunder local API client + data-driven display engine
-  overlay/       ← Rust binary: transparent always-on-top HUD (warthunder-byoh.exe / warthunder-byoh)
-  scraper/       ← Rust binary: live API field harvester (writes data/fields.json)
+  core_client/   <- Rust library: War Thunder local API client + data-driven display engine
+  overlay/       <- Rust binary: transparent always-on-top HUD (warthunder-byoh.exe / warthunder-byoh)
+  scraper/       <- Rust binary: live API field harvester (writes data/fields.json)
 tools/
-  parse_fm.py    ← Python script: parses game FM data → fm_data_db.csv + fm_names_db.csv
+  parse_fm.py    <- Python script: parses game FM data -> fm_data_db.csv + fm_names_db.csv
 data/
-  fields.json              ← scraped catalog of all known API fields
+  fields.json              <- scraped catalog of all known API fields
   fm/
-    fm_data_db.csv         ← flight model data (1,192 aircraft)
-    fm_names_db.csv        ← aircraft display names + types (1,537 aircraft)
-    version                ← game version the data was built from
-    version_tag            ← release tag (e.g. v2.55.1.88)
+    fm_data_db.csv         <- flight model data (1,192 aircraft)
+    fm_names_db.csv        <- aircraft display names + types (1,537 aircraft)
+    version                <- game version the data was built from
+    version_tag            <- release tag (e.g. v2.55.1.88)
 ```
 
 **core_client** (`crates/core_client/`)
@@ -84,10 +84,10 @@ Key flags:
 
 Datamine sources (all under the datamine output root):
 ```
-aces.vromfs.bin_u/gamedata/flightmodels/*.json    ← unit files (Name, FmName)
-aces.vromfs.bin_u/gamedata/flightmodels/fm/*.json ← FM parameter files
-char.vromfs.bin_u/config/unittags.json            ← type/country tags
-lang.vromfs.bin_u/lang/units.csv                  ← English display names
+aces.vromfs.bin_u/gamedata/flightmodels/*.json    <- unit files (Name, FmName)
+aces.vromfs.bin_u/gamedata/flightmodels/fm/*.json <- FM parameter files
+char.vromfs.bin_u/config/unittags.json            <- type/country tags
+lang.vromfs.bin_u/lang/units.csv                  <- English display names
 ```
 
 ---

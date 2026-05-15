@@ -60,7 +60,7 @@ pub struct FieldEntry {
 
 const ENDPOINTS: &[&str] = &["/state", "/indicators", "/mission.json"];
 
-// ── Key → id normalisation ────────────────────────────────────────────────────
+// ── Key -> id normalisation ────────────────────────────────────────────────────
 
 /// Convert a raw API key like `"throttle 1, %"` into a stable snake_case id
 /// like `"throttle_1_pct"`.
@@ -73,7 +73,7 @@ fn key_to_id(endpoint: &str, key: &str) -> String {
 
     let s = key
         .to_lowercase()
-        // common unit suffixes → short names
+        // common unit suffixes -> short names
         .replace(", %", "_pct")
         .replace(", km/h", "_kmh")
         .replace(", m/s", "_ms")
@@ -84,7 +84,7 @@ fn key_to_id(endpoint: &str, key: &str) -> String {
         .replace(", c", "_c")
         .replace(", g", "_g")
         .replace(", deg", "_deg")
-        // remaining punctuation → underscores
+        // remaining punctuation -> underscores
         .replace([' ', ',', '/', '\\', '-', '(', ')', '.'], "_");
 
     // Collapse multiple underscores
@@ -125,7 +125,7 @@ fn infer_unit(key: &str) -> String {
     String::new()
 }
 
-/// Derive a short label from an id, e.g. "altitude_m" → "ALT".
+/// Derive a short label from an id, e.g. "altitude_m" -> "ALT".
 fn default_label(id: &str) -> String {
     // Just use the first token uppercased for a default — user can edit fields.json
     let first = id.split('_').next().unwrap_or(id);

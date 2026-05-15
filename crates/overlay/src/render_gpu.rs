@@ -496,7 +496,7 @@ pub fn render_offscreen(
             .expect("[gpu] offscreen render pass");
     }
 
-    // Copy rendered texture → staging buffer.
+    // Copy rendered texture -> staging buffer.
     encoder.copy_texture_to_buffer(
         wgpu::ImageCopyTexture {
             texture: &state.render_texture,

@@ -4,14 +4,14 @@
 //!
 //! ```text
 //! Background threads (one per endpoint)
-//!   → each loops: GET /state | GET /indicators  (500 ms timeout, keep-alive)
-//!   → writes latest JsonValue into Arc<RwLock<EndpointCache>>
+//!   -> each loops: GET /state | GET /indicators  (500 ms timeout, keep-alive)
+//!   -> writes latest JsonValue into Arc<RwLock<EndpointCache>>
 //!
-//! fetch_display_windows()  ← called by overlay poller at 60 Hz, no HTTP
-//!   → reads EndpointCache snapshot (instant, no blocking)
-//!   → builds RawFrame from fields
-//!   → Calculator::evaluate per window
-//!   → Vec<WindowRows>
+//! fetch_display_windows()  <- called by overlay poller at 60 Hz, no HTTP
+//!   -> reads EndpointCache snapshot (instant, no blocking)
+//!   -> builds RawFrame from fields
+//!   -> Calculator::evaluate per window
+//!   -> Vec<WindowRows>
 //! ```
 //!
 //! The background threads run at whatever rate the game server allows (~6 Hz
@@ -347,7 +347,7 @@ pub struct FmRecord {
     pub landingflaps_crit_speed: Option<f64>,
 }
 
-/// Map from vehicle name (fm_names_db.csv `Name` column) → FmRecord.
+/// Map from vehicle name (fm_names_db.csv `Name` column) -> FmRecord.
 pub type FmDb = HashMap<String, FmRecord>;
 
 /// Load FM database from the two CSV files found relative to the exe.
@@ -366,7 +366,7 @@ pub fn load_fm_db(data_dir: Option<&Path>) -> FmDb {
     let data_path  = fm_dir.join("fm_data_db.csv");
 
     // --- fm_names_db.csv: Name;FmName;Type;English ---
-    // Build unit-name → FM-name aliases so that API vehicle names such as
+    // Build unit-name -> FM-name aliases so that API vehicle names such as
     // "av_8s_late_thailand" resolve to the correct FM record ("av_8s").
     // We only need Name and FmName; the other columns are ignored here.
 
@@ -498,7 +498,7 @@ pub fn load_fm_db(data_dir: Option<&Path>) -> FmDb {
     eprintln!("[fm_db] loaded {} records from {}", db.len(), data_path.display());
 
     // --- Load fm_names_db.csv and insert unit-name aliases ---
-    // For each row where Name != FmName (e.g. "av_8s_late_thailand" → "av_8s"),
+    // For each row where Name != FmName (e.g. "av_8s_late_thailand" -> "av_8s"),
     // copy the existing FmRecord under the unit name so lookups by API type work.
     let mut alias_count = 0usize;
     if let Ok(names_text) = std::fs::read_to_string(&names_path) {
@@ -529,9 +529,9 @@ pub fn load_fm_db(data_dir: Option<&Path>) -> FmDb {
 /// speed limits, return the applicable critical speed limit (km/h).
 ///
 /// Logic:
-/// - If ratio ≤ combat_flaps_ratio → use combat speed
-/// - Else if ratio ≤ takeoff_flaps_ratio → use takeoff speed
-/// - Else → use landing speed
+/// - If ratio ≤ combat_flaps_ratio -> use combat speed
+/// - Else if ratio ≤ takeoff_flaps_ratio -> use takeoff speed
+/// - Else -> use landing speed
 /// Returns `None` when flaps_pct ≤ 0 or no landing speed is available.
 pub fn compute_named_flaps_current(flaps_pct: f64, rec: &FmRecord) -> Option<f64> {
     if flaps_pct <= 0.0 { return None; }
@@ -1257,7 +1257,7 @@ pub fn seed_config_from_example() -> Result<(), String> {
         .map_err(|e| format!("mkdir {}: {e}", dest_dir.display()))?;
     let dest = dest_dir.join("indicators.json");
     std::fs::copy(&example, &dest)
-        .map_err(|e| format!("copy {} → {}: {e}", example.display(), dest.display()))?;
+        .map_err(|e| format!("copy {} -> {}: {e}", example.display(), dest.display()))?;
     eprintln!("[setup] created {} from {}", dest.display(), example.display());
     Ok(())
 }
@@ -1465,7 +1465,7 @@ impl Calculator {
         for (k, v) in frame {
             ctx.set_value(k.clone(), Value::Float(*v)).ok();
         }
-        // Try float, then int, then bool (bool → 1.0 / 0.0).
+        // Try float, then int, then bool (bool -> 1.0 / 0.0).
         eval_float_with_context(formula, &ctx)
             .ok()
             .or_else(|| eval_int_with_context(formula, &ctx).ok().map(|i| i as f64))
@@ -2202,7 +2202,7 @@ mod tests {
     fn test_named_flaps_a2d() {
         // a2d: CombatFlaps=20 (≠0), TakeoffFlaps=33 (≠0), raw pairs after filtering ratio=0:
         // (0.21,420), (0.33,351), (1.0,301)
-        // → combat=(0.21,420), takeoff=(0.33,351), landing=(1.0,301)
+        // -> combat=(0.21,420), takeoff=(0.33,351), landing=(1.0,301)
         let rec = FmRecord {
             combat_flaps_ratio:      Some(0.21), combatflaps_crit_speed:  Some(420.0),
             takeoff_flaps_ratio:     Some(0.33), takeoffflaps_crit_speed: Some(351.0),
@@ -2210,19 +2210,19 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(compute_named_flaps_current(0.0,  &rec), None);          // flaps up
-        assert_eq!(compute_named_flaps_current(10.0, &rec), Some(420.0));   // ratio=0.1 ≤ 0.21 → combat
-        assert_eq!(compute_named_flaps_current(21.0, &rec), Some(420.0));   // ratio=0.21 exactly → combat
-        assert_eq!(compute_named_flaps_current(25.0, &rec), Some(351.0));   // ratio=0.25 > 0.21, ≤ 0.33 → takeoff
-        assert_eq!(compute_named_flaps_current(33.0, &rec), Some(351.0));   // ratio=0.33 exactly → takeoff
-        assert_eq!(compute_named_flaps_current(50.0, &rec), Some(301.0));   // ratio=0.5 > 0.33 → landing
-        assert_eq!(compute_named_flaps_current(100.0,&rec), Some(301.0));   // full flaps → landing
+        assert_eq!(compute_named_flaps_current(10.0, &rec), Some(420.0));   // ratio=0.1 ≤ 0.21 -> combat
+        assert_eq!(compute_named_flaps_current(21.0, &rec), Some(420.0));   // ratio=0.21 exactly -> combat
+        assert_eq!(compute_named_flaps_current(25.0, &rec), Some(351.0));   // ratio=0.25 > 0.21, ≤ 0.33 -> takeoff
+        assert_eq!(compute_named_flaps_current(33.0, &rec), Some(351.0));   // ratio=0.33 exactly -> takeoff
+        assert_eq!(compute_named_flaps_current(50.0, &rec), Some(301.0));   // ratio=0.5 > 0.33 -> landing
+        assert_eq!(compute_named_flaps_current(100.0,&rec), Some(301.0));   // full flaps -> landing
     }
 
     #[test]
     fn test_named_flaps_a10a_no_combat() {
         // a-10a: CombatFlaps=0 (no combat), TakeoffFlaps=24 (≠0), 2 pairs after filter:
         // (0.33,740), (1.0,370.4)
-        // → no combat, takeoff=(0.33,740), landing=(1.0,370.4)
+        // -> no combat, takeoff=(0.33,740), landing=(1.0,370.4)
         let rec = FmRecord {
             combat_flaps_ratio:      None,        combatflaps_crit_speed:  None,
             takeoff_flaps_ratio:     Some(0.33),  takeoffflaps_crit_speed: Some(740.0),
@@ -2230,9 +2230,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(compute_named_flaps_current(0.0,  &rec), None);
-        assert_eq!(compute_named_flaps_current(10.0, &rec), Some(740.0));   // ratio=0.1 ≤ 0.33 → takeoff
+        assert_eq!(compute_named_flaps_current(10.0, &rec), Some(740.0));   // ratio=0.1 ≤ 0.33 -> takeoff
         assert_eq!(compute_named_flaps_current(33.0, &rec), Some(740.0));   // exactly at takeoff
-        assert_eq!(compute_named_flaps_current(50.0, &rec), Some(370.4));   // past takeoff → landing
+        assert_eq!(compute_named_flaps_current(50.0, &rec), Some(370.4));   // past takeoff -> landing
         assert_eq!(compute_named_flaps_current(100.0,&rec), Some(370.4));
     }
 
@@ -2240,7 +2240,7 @@ mod tests {
     fn test_named_flaps_a20g_no_takeoff() {
         // a-20g: CombatFlaps=20 (≠0), TakeoffFlaps=33 (≠0), but only 2 pairs after filter:
         // (0.1,445), (1.0,296)
-        // → combat=(0.1,445), only 1 pair left for landing so no takeoff, landing=(1.0,296)
+        // -> combat=(0.1,445), only 1 pair left for landing so no takeoff, landing=(1.0,296)
         let rec = FmRecord {
             combat_flaps_ratio:      Some(0.1),  combatflaps_crit_speed:  Some(445.0),
             takeoff_flaps_ratio:     None,        takeoffflaps_crit_speed: None,
@@ -2248,9 +2248,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(compute_named_flaps_current(0.0,  &rec), None);
-        assert_eq!(compute_named_flaps_current(5.0,  &rec), Some(445.0));   // ≤ 0.1 → combat
+        assert_eq!(compute_named_flaps_current(5.0,  &rec), Some(445.0));   // ≤ 0.1 -> combat
         assert_eq!(compute_named_flaps_current(10.0, &rec), Some(445.0));   // exactly at combat
-        assert_eq!(compute_named_flaps_current(20.0, &rec), Some(296.0));   // past combat, no takeoff → landing
+        assert_eq!(compute_named_flaps_current(20.0, &rec), Some(296.0));   // past combat, no takeoff -> landing
         assert_eq!(compute_named_flaps_current(100.0,&rec), Some(296.0));
     }
 
@@ -2298,7 +2298,7 @@ mod tests {
 
     #[test]
     fn test_sep_zero_accel_equals_vy() {
-        // Constant TAS → regression slope ≈ 0 → SEP ≈ vy_ms.
+        // Constant TAS -> regression slope ≈ 0 -> SEP ≈ vy_ms.
         let mut state = DerivedState::new();
         let t0 = Instant::now();
         for i in 0..4u64 {
@@ -2437,7 +2437,7 @@ mod tests {
 
     #[test]
     fn test_fuel_consume_calc_basic() {
-        // Two frames 1 second apart, burning 1 kg → 3600 kg/h raw rate.
+        // Two frames 1 second apart, burning 1 kg -> 3600 kg/h raw rate.
         // First call primes the state; second call emits the field.
         use std::time::Duration;
         let t0 = Instant::now();

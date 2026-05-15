@@ -152,12 +152,12 @@ Each entry in `indicators` defines one row in the window.
 | `format` | no | `"integer"` | How the computed value is rendered; see **Formats** |
 | `color` | no | — | Fixed colour token — bypasses all threshold logic |
 | `show_when` | no | always show | Expression; row is hidden when this evaluates to `0` or `false` |
-| `warn_above` | no | — | Colour → `warn` when `value > threshold` |
-| `warn_below` | no | — | Colour → `warn` when `value < threshold` |
-| `good_above` | no | — | Colour → `good` when `value > threshold` |
-| `good_below` | no | — | Colour → `good` when `value < threshold` |
-| `crit_above` | no | — | Colour → `crit` when `value > threshold` |
-| `crit_below` | no | — | Colour → `crit` when `value < threshold` |
+| `warn_above` | no | — | Colour -> `warn` when `value > threshold` |
+| `warn_below` | no | — | Colour -> `warn` when `value < threshold` |
+| `good_above` | no | — | Colour -> `good` when `value > threshold` |
+| `good_below` | no | — | Colour -> `good` when `value < threshold` |
+| `crit_above` | no | — | Colour -> `crit` when `value > threshold` |
+| `crit_below` | no | — | Colour -> `crit` when `value < threshold` |
 | `style` | no | — | Per-indicator colour overrides; only colour fields take effect (layout fields are ignored at indicator level) |
 
 #### Style object
@@ -216,7 +216,7 @@ Example window with a style block:
 | `"decimal2"` | `12.34` | Two decimal places |
 | `"+decimal1"` | `+12.3` / `-12.3` | One decimal place, always prints sign |
 | `"+decimal2"` | `+12.34` / `-12.34` | Two decimal places, always prints sign |
-| `"time"` | `4:32` / `1:23:45` | Treats value as **seconds**; renders as M:SS or H:MM:SS. Negative or non-finite → `--:--` |
+| `"time"` | `4:32` / `1:23:45` | Treats value as **seconds**; renders as M:SS or H:MM:SS. Negative or non-finite -> `--:--` |
 
 #### Colour tokens
 

@@ -34,8 +34,8 @@ const RELEASES_API: &str =
 ///   fm/
 ///     fm_data_db.csv
 ///     fm_names_db.csv
-///   version        ← game version string, e.g. "2.55.1.88"
-///   version_tag    ← release tag, e.g. "v2.55.1.88"
+///   version        <- game version string, e.g. "2.55.1.88"
+///   version_tag    <- release tag, e.g. "v2.55.1.88"
 /// ```
 pub fn fm_base_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
@@ -129,7 +129,7 @@ pub fn check_fm_update_available(fm_base: &Path) -> Option<(String, String)> {
         .and_then(|a| a["browser_download_url"].as_str())
         .map(|s| s.to_string())?;
 
-    eprintln!("[fm_update] update available: {local_tag:?} → {remote_tag}");
+    eprintln!("[fm_update] update available: {local_tag:?} -> {remote_tag}");
     Some((remote_tag, download_url))
 }
 
@@ -254,7 +254,7 @@ pub fn install_fm_update(
             eprintln!("[fm_update] write {}: {e}", out_path.display());
         }
 
-        // 0.9 → 1.0 over extraction
+        // 0.9 -> 1.0 over extraction
         let extract_frac = 0.9 + (i as f32 + 1.0) / total * 0.1;
         progress_cb(extract_frac.min(0.99));
     }

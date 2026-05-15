@@ -333,13 +333,13 @@ pub fn hide_from_taskbar(window: &winit::window::Window) {
 
                     // collectionBehavior flags:
                     //   NSWindowCollectionBehaviorCanJoinAllSpaces  = 1 << 0  (1)
-                    //     → overlay follows the user across all Spaces
+                    //     -> overlay follows the user across all Spaces
                     //   NSWindowCollectionBehaviorStationary        = 1 << 4  (16)
-                    //     → pinned; not moved by Exposé / Mission Control
+                    //     -> pinned; not moved by Exposé / Mission Control
                     //   NSWindowCollectionBehaviorTransient         = 1 << 7  (128)
-                    //     → excluded from the Dock window list and Mission Control
+                    //     -> excluded from the Dock window list and Mission Control
                     //   NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8 (256)
-                    //     → visible while another app is in fullscreen
+                    //     -> visible while another app is in fullscreen
                     let behavior: usize = (1 << 0) | (1 << 4) | (1 << 7) | (1 << 8);
                     let sel_cb = sel_registerName(b"setCollectionBehavior:\0".as_ptr() as *const std::ffi::c_char);
                     send_usize(ns_window, sel_cb, behavior);
@@ -397,8 +397,8 @@ pub fn set_click_through(window: &winit::window::Window, click_through: bool) {
 
 /// Adjust the macOS window level to match the overlay's active/hidden state.
 ///
-/// - `active = true`  → `NSScreenSaverWindowLevel` (1000): floats above the game.
-/// - `active = false` → level -1: sinks below all normal application windows so
+/// - `active = true`  -> `NSScreenSaverWindowLevel` (1000): floats above the game.
+/// - `active = false` -> level -1: sinks below all normal application windows so
 ///   the window neither blocks mouse input nor appears in Mission Control when
 ///   the overlay is hidden.
 ///
@@ -487,7 +487,7 @@ mod linux {
         true
     }
 
-    /// Check the `_NET_ACTIVE_WINDOW` → `_NET_WM_PID` → `/proc/<pid>/comm` chain.
+    /// Check the `_NET_ACTIVE_WINDOW` -> `_NET_WM_PID` -> `/proc/<pid>/comm` chain.
     /// Returns `None` if X11 is unavailable or any step fails.
     fn x11_foreground() -> Option<bool> {
         use x11rb::connection::Connection;
@@ -571,7 +571,7 @@ mod macos {
             let app = send(workspace, sel_registerName(b"frontmostApplication\0".as_ptr() as _));
             if app.is_null() { return false; }
 
-            // Try [app executableURL] → [url lastPathComponent] → UTF8String.
+            // Try [app executableURL] -> [url lastPathComponent] -> UTF8String.
             let url = send(app, sel_registerName(b"executableURL\0".as_ptr() as _));
             if !url.is_null() {
                 let component = send(url, sel_registerName(b"lastPathComponent\0".as_ptr() as _));
