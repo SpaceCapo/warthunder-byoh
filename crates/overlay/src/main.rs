@@ -134,7 +134,7 @@ type Shared = Arc<ArcSwap<Vec<core_client::WindowRows>>>;
 /// Rendering target for one overlay window in the GPU path.
 #[cfg(feature = "gpu")]
 enum GpuTarget {
-    /// Offscreen texture + staging readback → UpdateLayeredWindow (Windows).
+    /// Offscreen texture + staging readback -> UpdateLayeredWindow (Windows).
     #[cfg(target_os = "windows")]
     Offscreen(render_gpu::GpuOffscreenState),
     /// Direct surface presentation (Linux / macOS).
@@ -661,7 +661,7 @@ impl ApplicationHandler for GpuApp {
                             (&[], None)
                         }
                     } else {
-                        (&[], None) // empty rows → renderer paints fully transparent
+                        (&[], None) // empty rows -> renderer paints fully transparent
                     };
                 let blink = render_gpu::blink_on();
 
@@ -1400,7 +1400,7 @@ impl ApplicationHandler for OverlayApp {
                                 (&[], None)
                             }
                         } else {
-                            (&[], None) // empty rows → paint_layered writes fully transparent pixels
+                            (&[], None) // empty rows -> paint_layered writes fully transparent pixels
                         };
                     let size = ws.window.inner_size();
                     if let Some(hwnd) = win32::get_hwnd(&ws.window) {
@@ -1732,7 +1732,7 @@ fn paint_layered(
             }
         }
 
-        // GDI TextOut does NOT write the alpha byte — fix: any non-zero RGB → alpha=255.
+        // GDI TextOut does NOT write the alpha byte — fix: any non-zero RGB -> alpha=255.
         for p in pixels.iter_mut() {
             if *p & 0x00_FF_FF_FF != 0 {
                 *p |= 0xFF_00_00_00;

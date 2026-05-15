@@ -3,7 +3,7 @@
 // and embed a git-derived build version string via BYOH_BUILD_VERSION.
 //
 // Uses windres directly (x86_64-w64-mingw32-windres) instead of the winres
-// crate, which silently fails during Linux→Windows cross-compilation.
+// crate, which silently fails during Linux->Windows cross-compilation.
 
 fn main() {
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -11,7 +11,7 @@ fn main() {
 
     // ── Git-derived build version ────────────────────────────────────────────
     // Logic mirrors the shell one-liner:
-    //   exact tag → branch-sha+dirty (non-main branch) → sha+dirty → YYYYmmdd-HHmmss
+    //   exact tag -> branch-sha+dirty (non-main branch) -> sha+dirty -> YYYYmmdd-HHmmss
     let version = git_build_version();
     println!("cargo:rustc-env=BYOH_BUILD_VERSION={version}");
 
@@ -83,7 +83,7 @@ fn main() {
 // ── Git version helpers ───────────────────────────────────────────────────────
 
 /// Compute a version string from the current git state, replicating the logic:
-///   exact tag → branch-sha[+dirty] (non-main branch) → sha[+dirty] → timestamp
+///   exact tag -> branch-sha[+dirty] (non-main branch) -> sha[+dirty] -> timestamp
 ///
 /// When a `GIT_VERSION` environment variable is set (injected by the Makefile
 /// before invoking Docker), it is used directly.  This bypasses the
@@ -151,7 +151,7 @@ fn build_timestamp() -> String {
     let mm  = (tod % 3600) / 60;
     let ss  = tod % 60;
 
-    // Howard Hinnant's algorithm: days since Unix epoch → (y, m, d).
+    // Howard Hinnant's algorithm: days since Unix epoch -> (y, m, d).
     let z   = (secs / 86400) as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;

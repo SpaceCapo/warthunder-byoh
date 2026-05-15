@@ -32,7 +32,7 @@ pub struct SettingsWindow {
     surface_config: wgpu::SurfaceConfiguration,
     /// Whether the About dialog is open.
     show_about: bool,
-    /// Set to true when the user clicks File → Exit.
+    /// Set to true when the user clicks File -> Exit.
     pub exit_requested: bool,
     /// FM database version tag (e.g. "v2.55.1.88"), empty if unavailable.
     /// Wrapped in Arc<Mutex> so the background FM-update thread can write a
@@ -427,10 +427,11 @@ fn build_ui(
                         );
                     } else if let Some(remote_tag) = pending_update_tag {
                         ui.add_space(6.0);
+                        // Use ASCII arrow to avoid font glyph gaps on some systems.
                         let arrow = if fm_version_tag.is_empty() {
                             format!("FM update available: {remote_tag}")
                         } else {
-                            format!("FM update available: {fm_version_tag} → {remote_tag}")
+                            format!("FM update available: {fm_version_tag} -> {remote_tag}")
                         };
                         ui.label(
                             egui::RichText::new(arrow)

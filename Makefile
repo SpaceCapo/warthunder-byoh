@@ -6,7 +6,7 @@ MACOS_SDK_DEFAULT=/tmp/MacOSX26.1.sdk.tar.xz
 
 # ── Git-derived build version (computed on the host, before Docker runs) ───────
 # Mirrors the logic in crates/overlay/build.rs:
-#   exact tag → branch-sha[+dirty] (non-main) → sha[+dirty] → YYYYmmdd-HHmmss
+#   exact tag -> branch-sha[+dirty] (non-main) -> sha[+dirty] -> YYYYmmdd-HHmmss
 # Passed into Docker containers as GIT_VERSION so build.rs can embed it even
 # when git's safe.directory check would reject the mounted workspace.
 GIT_VERSION := $(shell \
