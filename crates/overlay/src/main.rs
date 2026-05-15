@@ -176,6 +176,10 @@ struct GpuApp {
     pending_fm_update: Arc<std::sync::Mutex<Option<(String, String)>>>,
     /// Install progress 0.0..=1.0 while an FM install is in progress, else None.
     fm_install_progress: Arc<std::sync::Mutex<Option<f32>>>,
+    /// Set by the settings install thread (or the setup wizard done branch)
+    /// after a successful FM install; the poller thread reads and clears it,
+    /// then calls `client.reload_fm_db()` to hot-swap the in-memory database.
+    fm_reload_needed: Arc<std::sync::atomic::AtomicBool>,
     /// Whether War Thunder is currently the foreground window.
     wt_foreground: Arc<std::sync::atomic::AtomicBool>,
     /// Whether the BYOH settings window is focused.
@@ -219,9 +223,10 @@ impl GpuApp {
         shared: Shared,
         shared_gen: SharedGen,
         window_defs: Vec<WindowDef>,
-        fm_version_tag: String,
+        fm_version_tag: Arc<std::sync::Mutex<String>>,
         pending_fm_update: Arc<std::sync::Mutex<Option<(String, String)>>>,
         fm_install_progress: Arc<std::sync::Mutex<Option<f32>>>,
+        fm_reload_needed: Arc<std::sync::atomic::AtomicBool>,
         wt_foreground: Arc<std::sync::atomic::AtomicBool>,
         mission_running: Arc<std::sync::atomic::AtomicBool>,
         app_config: Arc<std::sync::RwLock<core_client::AppConfig>>,
@@ -233,7 +238,6 @@ impl GpuApp {
     ) -> Self {
         let fm_update_deferred = setup_needs.as_ref().map_or(false, |n| n.any());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        let fm_version_tag = Arc::new(std::sync::Mutex::new(fm_version_tag));
         Self {
             shared,
             shared_gen,
@@ -249,6 +253,7 @@ impl GpuApp {
             fm_version_tag,
             pending_fm_update,
             fm_install_progress,
+            fm_reload_needed,
             wt_foreground,
             byoh_foreground: false,
             mission_running,
@@ -430,6 +435,7 @@ impl GpuApp {
                     self.fm_version_tag.clone(),
                     self.pending_fm_update.clone(),
                     self.fm_install_progress.clone(),
+                    self.fm_reload_needed.clone(),
                     self.app_config.clone(),
                     self.reload_requested.clone(),
                     self.reload_error.clone(),
@@ -713,6 +719,9 @@ impl ApplicationHandler for GpuApp {
                 self.setup_wizard = None;
                 // Trigger a poller reload so the client picks up fresh window defs.
                 self.reload_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                // Also trigger an FM database hot-swap — the wizard may have just
+                // downloaded the FM files for the first time.
+                self.fm_reload_needed.store(true, std::sync::atomic::Ordering::Relaxed);
                 self.create_overlay_windows(event_loop);
             }
             // While the wizard is active, redraw at ~60 fps for a responsive UI.
@@ -871,6 +880,13 @@ fn run_gpu_mode() {
         Arc::new(std::sync::Mutex::new(None));
     let fm_install_progress: Arc<std::sync::Mutex<Option<f32>>> =
         Arc::new(std::sync::Mutex::new(None));
+    // Created here so both the poller thread and SettingsWindow share the same Arc.
+    let fm_version_tag_arc: Arc<std::sync::Mutex<String>> =
+        Arc::new(std::sync::Mutex::new(fm_tag));
+    // Set by SettingsWindow install thread (and wizard done) to trigger a
+    // hot-swap of the in-memory FM database without restarting.
+    let fm_reload_needed: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // If no setup wizard will run, kick off the update check immediately in a
     // background thread.  Otherwise, GpuApp defers the check until after the
@@ -899,6 +915,8 @@ fn run_gpu_mode() {
         let reload_flag     = reload_requested.clone();
         let err_slot        = reload_error.clone();
         let pending_defs    = pending_window_defs.clone();
+        let fm_reload_flag  = fm_reload_needed.clone();
+        let fm_tag_arc      = fm_version_tag_arc.clone();
         std::thread::spawn(move || {
             // Reusable HTTP client for mission polling.
             let base_url = "http://localhost:8111";
@@ -927,6 +945,14 @@ fn run_gpu_mode() {
                                 *slot = Some(msg);
                             }
                         }
+                    }
+                }
+
+                // Hot-swap the FM database after an install or first-run download.
+                if fm_reload_flag.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    let new_tag = client.reload_fm_db();
+                    if let Ok(mut lock) = fm_tag_arc.lock() {
+                        *lock = new_tag;
                     }
                 }
 
@@ -959,9 +985,10 @@ fn run_gpu_mode() {
             shared,
             shared_gen,
             window_defs,
-            fm_tag,
+            fm_version_tag_arc,
             pending_fm_update,
             fm_install_progress,
+            fm_reload_needed,
             wt_foreground,
             mission_running,
             app_config,
